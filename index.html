@@ -1,0 +1,811 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ferramenta de Metadados</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        :root {
+            --bg: #0a0a0f;
+            --surface: #12121a;
+            --surface2: #1a1a28;
+            --border: #2a2a3d;
+            --accent: #6c5ce7;
+            --accent2: #a29bfe;
+            --green: #00b894;
+            --red: #e17055;
+            --orange: #fdcb6e;
+            --text: #e8e8f0;
+            --text2: #8888aa;
+            --radius: 12px;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            border-bottom: 1px solid var(--border);
+            padding: 24px 32px;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .header .icon {
+            width: 48px; height: 48px;
+            background: var(--accent);
+            border-radius: 12px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 24px;
+        }
+
+        .header h1 { font-size: 22px; font-weight: 700; }
+        .header p { color: var(--text2); font-size: 13px; margin-top: 2px; }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 32px;
+        }
+
+        /* Drop Zone */
+        .drop-zone {
+            border: 2px dashed var(--border);
+            border-radius: var(--radius);
+            padding: 60px 40px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            background: var(--surface);
+            position: relative;
+        }
+
+        .drop-zone:hover, .drop-zone.dragover {
+            border-color: var(--accent);
+            background: rgba(108, 92, 231, 0.05);
+        }
+
+        .drop-zone .icon { font-size: 48px; margin-bottom: 16px; }
+        .drop-zone h3 { font-size: 18px; margin-bottom: 8px; }
+        .drop-zone p { color: var(--text2); font-size: 13px; }
+
+        .drop-zone input[type="file"] {
+            position: absolute; inset: 0;
+            opacity: 0; cursor: pointer;
+        }
+
+        /* Folder input */
+        .folder-section {
+            margin-top: 16px;
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+
+        .folder-section input[type="text"] {
+            flex: 1;
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 10px 14px;
+            color: var(--text);
+            font-size: 14px;
+        }
+
+        /* Buttons */
+        .btn {
+            padding: 10px 20px;
+            border-radius: 8px;
+            border: none;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            color: white;
+        }
+        .btn-primary:hover { background: #5b4bd5; }
+        .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .btn-success {
+            background: var(--green);
+            color: white;
+        }
+        .btn-success:hover { background: #00a884; }
+
+        .btn-outline {
+            background: transparent;
+            color: var(--text);
+            border: 1px solid var(--border);
+        }
+        .btn-outline:hover { border-color: var(--accent); }
+
+        /* Mode Selection */
+        .mode-section {
+            margin-top: 32px;
+        }
+
+        .mode-section h2 {
+            font-size: 16px;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .mode-cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 12px;
+        }
+
+        .mode-card {
+            background: var(--surface);
+            border: 2px solid var(--border);
+            border-radius: var(--radius);
+            padding: 20px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .mode-card:hover { border-color: var(--accent2); }
+        .mode-card.active { border-color: var(--accent); background: rgba(108, 92, 231, 0.08); }
+        .mode-card h3 { font-size: 15px; margin-bottom: 6px; }
+        .mode-card p { color: var(--text2); font-size: 12px; line-height: 1.5; }
+
+        /* Custom options */
+        .custom-options {
+            margin-top: 20px;
+            padding: 20px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            display: none;
+        }
+
+        .custom-options.visible { display: block; }
+
+        .form-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        .form-group label {
+            display: block;
+            font-size: 12px;
+            color: var(--text2);
+            margin-bottom: 4px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .form-group input, .form-group select {
+            width: 100%;
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 8px 12px;
+            color: var(--text);
+            font-size: 13px;
+        }
+
+        /* File List */
+        .file-list-section {
+            margin-top: 32px;
+        }
+
+        .file-list-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .file-list-header h2 {
+            font-size: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .file-count {
+            background: var(--accent);
+            color: white;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .file-list {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            overflow: hidden;
+        }
+
+        .file-item {
+            display: grid;
+            grid-template-columns: 32px 1fr 100px 100px 60px;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border);
+            font-size: 13px;
+        }
+
+        .file-item:last-child { border-bottom: none; }
+
+        .file-icon {
+            width: 32px; height: 32px;
+            border-radius: 6px;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 14px;
+        }
+
+        .file-icon.video { background: rgba(108, 92, 231, 0.2); }
+        .file-icon.image { background: rgba(0, 184, 148, 0.2); }
+
+        .file-name { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .file-size { color: var(--text2); text-align: right; }
+
+        .file-status {
+            text-align: center;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 6px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .badge-pending { background: rgba(136, 136, 170, 0.15); color: var(--text2); }
+        .badge-processing { background: rgba(253, 203, 110, 0.15); color: var(--orange); }
+        .badge-done { background: rgba(0, 184, 148, 0.15); color: var(--green); }
+        .badge-error { background: rgba(225, 112, 85, 0.15); color: var(--red); }
+
+        .file-actions a {
+            color: var(--accent2);
+            text-decoration: none;
+            font-size: 12px;
+        }
+
+        /* Progress Bar */
+        .progress-section {
+            margin-top: 24px;
+            display: none;
+        }
+
+        .progress-section.visible { display: block; }
+
+        .progress-bar-bg {
+            width: 100%;
+            height: 8px;
+            background: var(--surface2);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .progress-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--accent), var(--green));
+            border-radius: 4px;
+            transition: width 0.3s;
+            width: 0%;
+        }
+
+        .progress-text {
+            margin-top: 8px;
+            font-size: 13px;
+            color: var(--text2);
+            display: flex;
+            justify-content: space-between;
+        }
+
+        /* Result Section */
+        .result-section {
+            margin-top: 24px;
+            padding: 24px;
+            background: var(--surface);
+            border: 1px solid var(--green);
+            border-radius: var(--radius);
+            display: none;
+            text-align: center;
+        }
+
+        .result-section.visible { display: block; }
+        .result-section h3 { color: var(--green); font-size: 18px; margin-bottom: 8px; }
+        .result-section p { color: var(--text2); font-size: 13px; margin-bottom: 16px; }
+
+        /* Metadata Preview Modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 100;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-overlay.visible { display: flex; }
+
+        .modal {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 24px;
+            max-width: 500px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+
+        .modal h3 {
+            margin-bottom: 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal .close-btn {
+            background: none; border: none; color: var(--text2);
+            cursor: pointer; font-size: 20px;
+        }
+
+        .meta-table {
+            width: 100%;
+            font-size: 12px;
+        }
+
+        .meta-table tr td {
+            padding: 6px 8px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .meta-table tr td:first-child {
+            color: var(--text2);
+            font-weight: 600;
+            width: 40%;
+            text-transform: uppercase;
+            font-size: 10px;
+            letter-spacing: 0.5px;
+        }
+
+        .actions-bar {
+            margin-top: 24px;
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+        }
+
+        @media (max-width: 768px) {
+            .container { padding: 16px; }
+            .file-item { grid-template-columns: 32px 1fr 60px; }
+            .file-item .file-size, .file-item .file-actions { display: none; }
+            .form-grid { grid-template-columns: 1fr; }
+            .mode-cards { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="header">
+    <div class="icon">🔒</div>
+    <div>
+        <h1>Ferramenta de Metadados</h1>
+        <p>Remoção e substituição de metadados de fotos e vídeos — sem perda de qualidade</p>
+    </div>
+</div>
+
+<div class="container">
+
+    <!-- Drop Zone -->
+    <div class="drop-zone" id="dropZone">
+        <input type="file" id="fileInput" multiple accept="image/*,video/*,.mp4,.mov,.avi,.mkv,.m4v">
+        <div class="icon">📁</div>
+        <h3>Arraste e solte arquivos aqui</h3>
+        <p>Ou clique para selecionar — JPG, PNG, HEIC, MP4, MOV, AVI, MKV e mais</p>
+    </div>
+
+    <div class="folder-section">
+        <input type="text" id="folderPath" placeholder="Ou cole o caminho de uma pasta local (ex: /Users/lucas/Downloads/fotos)">
+        <button class="btn btn-outline" onclick="loadFolder()">Carregar Pasta</button>
+    </div>
+
+    <!-- Mode -->
+    <div class="mode-section" id="modeSection" style="display:none;">
+        <h2>⚙️ Modo de Operação</h2>
+        <div class="mode-cards">
+            <div class="mode-card active" data-mode="remove" onclick="selectMode(this)">
+                <h3>🗑️ Remover Tudo</h3>
+                <p>Remove todos os metadados. O arquivo fica completamente limpo, sem rastros de câmera, data, GPS, software.</p>
+            </div>
+            <div class="mode-card" data-mode="replace" onclick="selectMode(this)">
+                <h3>🔄 Substituir Aleatório</h3>
+                <p>Substitui por metadados totalmente novos e aleatórios: câmera, data, localização GPS, software diferentes.</p>
+            </div>
+            <div class="mode-card" data-mode="custom" onclick="selectMode(this)">
+                <h3>✏️ Personalizado</h3>
+                <p>Você escolhe a câmera, data, GPS e software que serão inseridos nos arquivos.</p>
+            </div>
+        </div>
+
+        <div class="custom-options" id="customOptions">
+            <div class="form-grid">
+                <div class="form-group">
+                    <label>Câmera / Dispositivo</label>
+                    <input type="text" id="optCamera" placeholder="Ex: Apple iPhone 15 Pro">
+                </div>
+                <div class="form-group">
+                    <label>Software</label>
+                    <input type="text" id="optSoftware" placeholder="Ex: Adobe Lightroom 7.0">
+                </div>
+                <div class="form-group">
+                    <label>Data</label>
+                    <input type="date" id="optDate">
+                </div>
+                <div class="form-group">
+                    <label>GPS (latitude, longitude)</label>
+                    <input type="text" id="optGPS" placeholder="Ex: -23.5505, -46.6333">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- File List -->
+    <div class="file-list-section" id="fileListSection" style="display:none;">
+        <div class="file-list-header">
+            <h2>📋 Arquivos <span class="file-count" id="fileCount">0</span></h2>
+            <button class="btn btn-outline" onclick="clearFiles()">Limpar</button>
+        </div>
+        <div class="file-list" id="fileList"></div>
+    </div>
+
+    <!-- Progress -->
+    <div class="progress-section" id="progressSection">
+        <div class="progress-bar-bg">
+            <div class="progress-bar-fill" id="progressFill"></div>
+        </div>
+        <div class="progress-text">
+            <span id="progressText">Processando...</span>
+            <span id="progressPercent">0%</span>
+        </div>
+    </div>
+
+    <!-- Actions -->
+    <div class="actions-bar" id="actionsBar" style="display:none;">
+        <button class="btn btn-primary" id="btnProcess" onclick="startProcessing()">
+            🚀 Processar Todos
+        </button>
+    </div>
+
+    <!-- Result -->
+    <div class="result-section" id="resultSection">
+        <h3>✅ Processamento Concluído!</h3>
+        <p id="resultText">Todos os arquivos foram processados com sucesso.</p>
+        <button class="btn btn-success" id="btnDownloadAll" onclick="downloadAll()">
+            ⬇️ Baixar Todos (ZIP)
+        </button>
+    </div>
+
+</div>
+
+<!-- Metadata Modal -->
+<div class="modal-overlay" id="metaModal">
+    <div class="modal">
+        <h3>
+            <span id="metaModalTitle">Metadados</span>
+            <button class="close-btn" onclick="closeModal()">&times;</button>
+        </h3>
+        <table class="meta-table" id="metaTable"></table>
+    </div>
+</div>
+
+<script>
+    let files = [];
+    let currentMode = 'remove';
+    let currentJobId = null;
+
+    // ── Drag & Drop ──
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+
+    dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropZone.classList.add('dragover');
+    });
+
+    dropZone.addEventListener('dragleave', () => {
+        dropZone.classList.remove('dragover');
+    });
+
+    dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('dragover');
+        handleFiles(e.dataTransfer.files);
+    });
+
+    fileInput.addEventListener('change', () => {
+        handleFiles(fileInput.files);
+    });
+
+    async function handleFiles(fileList) {
+        if (!fileList.length) return;
+
+        const formData = new FormData();
+        for (const f of fileList) {
+            formData.append('files', f);
+        }
+
+        dropZone.innerHTML = '<div class="icon">⏳</div><h3>Carregando...</h3>';
+
+        try {
+            const res = await fetch('/api/upload', { method: 'POST', body: formData });
+            const data = await res.json();
+
+            if (data.error) {
+                alert(data.error);
+                resetDropZone();
+                return;
+            }
+
+            currentJobId = data.job_id;
+            files = data.files;
+            renderFiles();
+            showSections();
+        } catch (err) {
+            alert('Erro ao enviar arquivos: ' + err.message);
+            resetDropZone();
+        }
+    }
+
+    async function loadFolder() {
+        const path = document.getElementById('folderPath').value.trim();
+        if (!path) return;
+
+        try {
+            const res = await fetch('/api/upload-folder', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ path })
+            });
+            const data = await res.json();
+
+            if (data.error) {
+                alert(data.error);
+                return;
+            }
+
+            currentJobId = data.job_id;
+            files = data.files;
+            renderFiles();
+            showSections();
+        } catch (err) {
+            alert('Erro: ' + err.message);
+        }
+    }
+
+    function resetDropZone() {
+        dropZone.innerHTML = `
+            <input type="file" id="fileInput" multiple accept="image/*,video/*,.mp4,.mov,.avi,.mkv,.m4v">
+            <div class="icon">📁</div>
+            <h3>Arraste e solte arquivos aqui</h3>
+            <p>Ou clique para selecionar — JPG, PNG, HEIC, MP4, MOV, AVI, MKV e mais</p>
+        `;
+        document.getElementById('fileInput').addEventListener('change', () => {
+            handleFiles(document.getElementById('fileInput').files);
+        });
+    }
+
+    function showSections() {
+        document.getElementById('modeSection').style.display = 'block';
+        document.getElementById('fileListSection').style.display = 'block';
+        document.getElementById('actionsBar').style.display = 'flex';
+    }
+
+    function formatSize(bytes) {
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+        return (bytes / 1048576).toFixed(1) + ' MB';
+    }
+
+    function renderFiles() {
+        const list = document.getElementById('fileList');
+        document.getElementById('fileCount').textContent = files.length;
+
+        list.innerHTML = files.map((f, i) => {
+            const ext = f.name.split('.').pop().toLowerCase();
+            const isVideo = ['mp4','mov','avi','mkv','m4v','wmv','webm','3gp'].includes(ext);
+            const iconClass = isVideo ? 'video' : 'image';
+            const icon = isVideo ? '🎬' : '🖼️';
+
+            return `
+                <div class="file-item" id="file-${i}">
+                    <div class="file-icon ${iconClass}">${icon}</div>
+                    <div class="file-name" title="${f.name}">${f.name}</div>
+                    <div class="file-size">${formatSize(f.size)}</div>
+                    <div class="file-status"><span class="badge badge-pending">Pendente</span></div>
+                    <div class="file-actions">
+                        <a href="#" onclick="showMeta(${i}); return false;">Ver</a>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    }
+
+    function selectMode(el) {
+        document.querySelectorAll('.mode-card').forEach(c => c.classList.remove('active'));
+        el.classList.add('active');
+        currentMode = el.dataset.mode;
+
+        const custom = document.getElementById('customOptions');
+        custom.classList.toggle('visible', currentMode === 'custom');
+    }
+
+    function showMeta(idx) {
+        const f = files[idx];
+        const meta = f.metadata || {};
+        const table = document.getElementById('metaTable');
+        document.getElementById('metaModalTitle').textContent = f.name;
+
+        let rows = '';
+        for (const [k, v] of Object.entries(meta)) {
+            if (k === 'file') continue;
+            const label = k.replace(/_/g, ' ').replace(/tag /g, '');
+            rows += `<tr><td>${label}</td><td>${v}</td></tr>`;
+        }
+
+        table.innerHTML = rows || '<tr><td colspan="2" style="text-align:center;color:var(--text2)">Nenhum metadado encontrado</td></tr>';
+        document.getElementById('metaModal').classList.add('visible');
+    }
+
+    function closeModal() {
+        document.getElementById('metaModal').classList.remove('visible');
+    }
+
+    async function startProcessing() {
+        const btn = document.getElementById('btnProcess');
+        btn.disabled = true;
+        btn.textContent = '⏳ Processando...';
+
+        const payload = {
+            job_id: currentJobId,
+            mode: currentMode === 'custom' ? 'replace' : currentMode,
+            files: files.map(f => ({ path: f.path, name: f.name, size: f.size }))
+        };
+
+        if (currentMode === 'custom') {
+            const cam = document.getElementById('optCamera').value.trim();
+            const sw = document.getElementById('optSoftware').value.trim();
+            const dt = document.getElementById('optDate').value;
+            const gps = document.getElementById('optGPS').value.trim();
+
+            if (cam) payload.camera = cam;
+            if (sw) payload.software = sw;
+            if (dt) payload.date = dt;
+            if (gps) {
+                const parts = gps.split(',').map(s => s.trim());
+                if (parts.length === 2) {
+                    payload.lat = parts[0];
+                    payload.lon = parts[1];
+                }
+            }
+        }
+
+        try {
+            const res = await fetch('/api/process', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const data = await res.json();
+            currentJobId = data.job_id;
+
+            document.getElementById('progressSection').classList.add('visible');
+            pollStatus();
+        } catch (err) {
+            alert('Erro: ' + err.message);
+            btn.disabled = false;
+            btn.textContent = '🚀 Processar Todos';
+        }
+    }
+
+    async function pollStatus() {
+        try {
+            const res = await fetch(`/api/status/${currentJobId}`);
+            const data = await res.json();
+
+            const pct = data.total > 0 ? Math.round((data.current / data.total) * 100) : 0;
+            document.getElementById('progressFill').style.width = pct + '%';
+            document.getElementById('progressPercent').textContent = pct + '%';
+            document.getElementById('progressText').textContent =
+                `Processando ${data.current} de ${data.total}...`;
+
+            // Update file statuses
+            if (data.results) {
+                data.results.forEach((r, i) => {
+                    const el = document.getElementById(`file-${i}`);
+                    if (!el) return;
+                    const statusEl = el.querySelector('.file-status');
+                    if (r.status === 'ok') {
+                        statusEl.innerHTML = `<span class="badge badge-done">✓ OK</span>`;
+                        const actionsEl = el.querySelector('.file-actions');
+                        actionsEl.innerHTML = `<a href="/api/download/${currentJobId}/${r.output}" download>⬇</a>`;
+                    } else if (r.status === 'error') {
+                        statusEl.innerHTML = `<span class="badge badge-error">Erro</span>`;
+                    }
+                });
+            }
+
+            if (data.status === 'done') {
+                document.getElementById('progressText').textContent = 'Concluído!';
+                document.getElementById('progressFill').style.width = '100%';
+                document.getElementById('progressPercent').textContent = '100%';
+
+                const okCount = data.results.filter(r => r.status === 'ok').length;
+                document.getElementById('resultText').textContent =
+                    `${okCount} de ${data.total} arquivo(s) processados com sucesso.`;
+                document.getElementById('resultSection').classList.add('visible');
+                document.getElementById('actionsBar').style.display = 'none';
+            } else {
+                // Mark current as processing
+                const currentIdx = data.current - 1;
+                if (currentIdx >= 0) {
+                    const el = document.getElementById(`file-${currentIdx}`);
+                    if (el) {
+                        const statusEl = el.querySelector('.file-status');
+                        if (!statusEl.innerHTML.includes('badge-done')) {
+                            statusEl.innerHTML = `<span class="badge badge-processing">⏳</span>`;
+                        }
+                    }
+                }
+                setTimeout(pollStatus, 500);
+            }
+        } catch (err) {
+            setTimeout(pollStatus, 1000);
+        }
+    }
+
+    function downloadAll() {
+        window.location.href = `/api/download-all/${currentJobId}`;
+    }
+
+    function clearFiles() {
+        files = [];
+        currentJobId = null;
+        document.getElementById('fileListSection').style.display = 'none';
+        document.getElementById('modeSection').style.display = 'none';
+        document.getElementById('actionsBar').style.display = 'none';
+        document.getElementById('progressSection').classList.remove('visible');
+        document.getElementById('resultSection').classList.remove('visible');
+        resetDropZone();
+        const btn = document.getElementById('btnProcess');
+        btn.disabled = false;
+        btn.textContent = '🚀 Processar Todos';
+    }
+
+    // Close modal on outside click
+    document.getElementById('metaModal').addEventListener('click', (e) => {
+        if (e.target === e.currentTarget) closeModal();
+    });
+</script>
+
+</body>
+</html>
