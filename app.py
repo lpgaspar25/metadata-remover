@@ -31,7 +31,7 @@ OUTPUT_DIR = Path(tempfile.gettempdir()) / "metadata_tool_output"
 UPLOAD_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR.mkdir(exist_ok=True)
 
-IMAGE_EXTS = {".jpg", ".jpeg", ".tiff", ".tif", ".png", ".heic", ".webp", ".bmp"}
+IMAGE_EXTS = {".jpg", ".jpeg", ".tiff", ".tif", ".png", ".heic", ".webp", ".bmp", ".gif"}
 VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".m4v", ".wmv", ".flv", ".3gp", ".webm"}
 FFMPEG = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
 FFPROBE = shutil.which("ffprobe") or "/opt/homebrew/bin/ffprobe"
@@ -144,6 +144,58 @@ def get_file_metadata(filepath):
     return meta
 
 
+def save_image_lossless(img, output_path, ext, exif_bytes=None):
+    """Save image in the best quality for each format."""
+    if ext in (".jpg", ".jpeg"):
+        kwargs = {"format": "JPEG", "quality": 100, "subsampling": 0}
+        if exif_bytes:
+            kwargs["exif"] = exif_bytes
+        img.save(output_path, **kwargs)
+    elif ext == ".png":
+        img.save(output_path, "PNG", compress_level=1)
+    elif ext == ".webp":
+        img.save(output_path, "WEBP", quality=100, lossless=True)
+    elif ext == ".gif":
+        # Preserve animation if present
+        if getattr(img, "is_animated", False):
+            frames = []
+            durations = []
+            for i in range(img.n_frames):
+                img.seek(i)
+                frame = img.copy()
+                if frame.mode != "RGBA":
+                    frame = frame.convert("RGBA")
+                frames.append(frame)
+                durations.append(img.info.get("duration", 100))
+            frames[0].save(
+                output_path, "GIF", save_all=True,
+                append_images=frames[1:], duration=durations,
+                loop=img.info.get("loop", 0), optimize=False
+            )
+        else:
+            img.save(output_path, "GIF")
+    elif ext == ".bmp":
+        img.save(output_path, "BMP")
+    elif ext in (".tiff", ".tif"):
+        kwargs = {"format": "TIFF", "compression": "tiff_lzw"}
+        img.save(output_path, **kwargs)
+    elif ext == ".heic":
+        # PIL can read HEIC (with pillow-heif) but save as PNG to preserve quality
+        # since HEIC writing requires special encoder
+        output_path_str = str(output_path)
+        if output_path_str.lower().endswith(".heic"):
+            # Try saving as HEIC, fall back to lossless PNG
+            try:
+                img.save(output_path, quality=100)
+            except Exception:
+                new_path = output_path_str.rsplit(".", 1)[0] + ".png"
+                img.save(new_path, "PNG", compress_level=1)
+        else:
+            img.save(output_path, quality=100)
+    else:
+        img.save(output_path)
+
+
 def process_image(input_path, output_path, mode, custom_meta=None):
     """Process image without quality loss."""
     from PIL import Image
@@ -153,17 +205,17 @@ def process_image(input_path, output_path, mode, custom_meta=None):
     img = Image.open(input_path)
 
     if mode == "remove":
-        data = list(img.getdata())
-        clean = Image.new(img.mode, img.size)
-        clean.putdata(data)
-        if ext in (".jpg", ".jpeg"):
-            clean.save(output_path, "JPEG", quality=100, subsampling=0)
-        elif ext == ".png":
-            clean.save(output_path, "PNG", compress_level=1)
-        elif ext == ".webp":
-            clean.save(output_path, "WEBP", quality=100, lossless=True)
+        if ext == ".gif" and getattr(img, "is_animated", False):
+            # For animated GIFs, re-save without metadata
+            save_image_lossless(img, output_path, ext)
         else:
-            clean.save(output_path)
+            # Strip metadata by copying pixel data to a new image
+            if img.mode == "P":
+                img = img.convert("RGBA")
+            data = list(img.getdata())
+            clean = Image.new(img.mode, img.size)
+            clean.putdata(data)
+            save_image_lossless(clean, output_path, ext)
         return {"status": "ok", "action": "removed"}
 
     # Replace mode
@@ -196,15 +248,18 @@ def process_image(input_path, output_path, mode, custom_meta=None):
     try:
         exif_bytes = piexif.dump(exif_dict)
         if ext in (".jpg", ".jpeg"):
-            img.save(output_path, "JPEG", exif=exif_bytes, quality=100, subsampling=0)
+            save_image_lossless(img, output_path, ext, exif_bytes)
+        elif ext == ".gif":
+            # GIFs don't support EXIF — just save clean
+            save_image_lossless(img, output_path, ext)
         else:
-            img.save(output_path, quality=100)
+            save_image_lossless(img, output_path, ext)
             try:
                 piexif.insert(exif_bytes, str(output_path))
             except Exception:
                 pass
     except Exception:
-        img.save(output_path, quality=100)
+        save_image_lossless(img, output_path, ext)
 
     return {
         "status": "ok", "action": "replaced",
