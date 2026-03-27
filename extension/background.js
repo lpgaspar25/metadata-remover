@@ -110,6 +110,10 @@ async function processPipeline(urls, options) {
     if (options.customMeta) {
       payload.custom_meta = options.customMeta;
     }
+    if (options.saveToDrive) {
+      payload.save_to_drive = true;
+      payload.drive_folder = options.driveFolder || "Media Processada";
+    }
 
     const r = await fetch(`${API_BASE}/api/process-pipeline`, {
       method: "POST",

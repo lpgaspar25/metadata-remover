@@ -6,6 +6,7 @@ let serverOnline = false;
 // ── Init ──
 document.addEventListener("DOMContentLoaded", () => {
   checkServer();
+  checkDriveStatus();
   setupListeners();
 });
 
@@ -61,6 +62,11 @@ function setupListeners() {
     document.getElementById("resizeInputs").style.display = e.target.checked ? "flex" : "none";
   });
 
+  // Drive checkbox
+  document.getElementById("chkDrive").addEventListener("change", (e) => {
+    document.getElementById("driveFolderRow").style.display = e.target.checked ? "flex" : "none";
+  });
+
   // Download buttons
   document.getElementById("btnDirectDL").addEventListener("click", directDownload);
   document.getElementById("btnProcessDL").addEventListener("click", processAndDownload);
@@ -73,6 +79,27 @@ async function checkServer() {
     document.getElementById("statusDot").classList.toggle("online", serverOnline);
     document.getElementById("statusText").textContent = serverOnline ? "Online" : "Offline";
   });
+}
+
+// ── Drive Status Check ──
+async function checkDriveStatus() {
+  try {
+    const r = await fetch("http://localhost:5555/api/drive-status", { signal: AbortSignal.timeout(3000) });
+    const data = await r.json();
+    const badge = document.getElementById("driveStatus");
+    if (data.configured) {
+      badge.textContent = "OK";
+      badge.style.background = "rgba(0,184,148,0.15)";
+      badge.style.color = "#00b894";
+    } else {
+      badge.textContent = "N/A";
+      badge.style.background = "rgba(225,112,85,0.15)";
+      badge.style.color = "#e17055";
+    }
+  } catch {
+    const badge = document.getElementById("driveStatus");
+    badge.textContent = "N/A";
+  }
 }
 
 // ── Scan Current Page ──
@@ -306,8 +333,16 @@ async function processAndDownload() {
     }
   }
 
-  // If mode is "none" and no webp/resize, just do direct download
-  if (metaMode === "none" && !options.convertWebp && !options.resize) {
+  // Drive options
+  const saveToDrive = document.getElementById("chkDrive").checked;
+  const saveToLocal = document.getElementById("chkLocal").checked;
+  if (saveToDrive) {
+    options.saveToDrive = true;
+    options.driveFolder = document.getElementById("driveFolder").value.trim() || "Media Processada";
+  }
+
+  // If mode is "none" and no webp/resize and no drive, just do direct download
+  if (metaMode === "none" && !options.convertWebp && !options.resize && !saveToDrive) {
     btn.disabled = false;
     btn.textContent = "Processar e Baixar";
     directDownload();
@@ -336,11 +371,23 @@ async function processAndDownload() {
         updateProgress(status.current || 0, status.total || urls.length);
 
         if (status.status === "done") {
-          // Download ZIP
-          chrome.runtime.sendMessage({ action: "downloadProcessed", jobId });
+          // Download to computer if checked
+          if (saveToLocal) {
+            chrome.runtime.sendMessage({ action: "downloadProcessed", jobId });
+          }
           btn.disabled = false;
           btn.textContent = "Processar e Baixar";
-          updateProgress(status.total, status.total, "Concluido! Baixando ZIP...");
+
+          // Build completion message
+          let msg = "Concluido!";
+          if (saveToLocal) msg += " ZIP baixando...";
+          if (status.drive_links?.length > 0) {
+            msg += ` ${status.drive_links.length} arquivo(s) no Drive.`;
+          }
+          if (status.drive_error) {
+            msg += ` Erro Drive: ${status.drive_error}`;
+          }
+          updateProgress(status.total, status.total, msg);
         } else {
           setTimeout(poll, 800);
         }

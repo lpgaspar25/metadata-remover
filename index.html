@@ -726,7 +726,11 @@
             <button class="btn btn-success" id="btnDownloadAll" onclick="downloadAll()">
                 Baixar Todos (ZIP)
             </button>
+            <button class="btn btn-primary" id="btnSendDrive" onclick="sendToDrive()" style="display:none;">
+                Enviar para Google Drive
+            </button>
         </div>
+        <p id="driveResult" style="margin-top:12px;font-size:12px;color:var(--green);display:none;"></p>
     </div>
 
 </div>
@@ -1165,6 +1169,38 @@
 
     function downloadAll() {
         window.location.href = `/api/download-all/${currentJobId}`;
+    }
+
+    // Check Drive status on load
+    fetch('/api/drive-status').then(r => r.json()).then(data => {
+        if (data.configured) {
+            document.getElementById('btnSendDrive').style.display = 'inline-flex';
+        }
+    }).catch(() => {});
+
+    async function sendToDrive() {
+        const btn = document.getElementById('btnSendDrive');
+        btn.disabled = true;
+        btn.textContent = 'Enviando...';
+        try {
+            const res = await fetch('/api/upload-drive', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({job_id: currentJobId, folder_name: 'Media Processada'})
+            });
+            const data = await res.json();
+            if (data.success) {
+                const driveResult = document.getElementById('driveResult');
+                driveResult.style.display = 'block';
+                driveResult.textContent = `${data.count} arquivo(s) enviado(s) para o Google Drive!`;
+            } else {
+                alert(data.error || 'Erro ao enviar para Drive');
+            }
+        } catch (e) {
+            alert('Erro: ' + e.message);
+        }
+        btn.disabled = false;
+        btn.textContent = 'Enviar para Google Drive';
     }
 
     function clearFiles() {

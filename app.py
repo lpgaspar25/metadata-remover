@@ -38,6 +38,80 @@ def add_cors(response):
     return response
 
 # ─────────────────────────────────────────────
+# Google Drive
+# ─────────────────────────────────────────────
+DRIVE_CREDENTIALS = Path(__file__).parent / "drive_credentials.json"
+_drive_service = None
+
+
+def get_drive_service():
+    """Get Google Drive API service (lazy init, uses service account)."""
+    global _drive_service
+    if _drive_service:
+        return _drive_service
+    if not DRIVE_CREDENTIALS.exists():
+        return None
+    try:
+        from google.oauth2 import service_account
+        from googleapiclient.discovery import build
+        creds = service_account.Credentials.from_service_account_file(
+            str(DRIVE_CREDENTIALS),
+            scopes=["https://www.googleapis.com/auth/drive.file"]
+        )
+        _drive_service = build("drive", "v3", credentials=creds)
+        return _drive_service
+    except Exception as e:
+        print(f"[Drive] Erro ao inicializar: {e}")
+        return None
+
+
+def drive_find_or_create_folder(service, folder_name, parent_id=None):
+    """Find or create a folder in Google Drive."""
+    query = f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+    if parent_id:
+        query += f" and '{parent_id}' in parents"
+    results = service.files().list(q=query, spaces="drive", fields="files(id, name)").execute()
+    files = results.get("files", [])
+    if files:
+        return files[0]["id"]
+    # Create
+    meta = {"name": folder_name, "mimeType": "application/vnd.google-apps.folder"}
+    if parent_id:
+        meta["parents"] = [parent_id]
+    folder = service.files().create(body=meta, fields="id").execute()
+    return folder["id"]
+
+
+def drive_upload_file(service, filepath, folder_id):
+    """Upload a single file to Google Drive folder."""
+    from googleapiclient.http import MediaFileUpload
+    fname = Path(filepath).name
+    file_meta = {"name": fname, "parents": [folder_id]}
+
+    ext = Path(filepath).suffix.lower()
+    mime_map = {
+        ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+        ".webp": "image/webp", ".gif": "image/gif", ".bmp": "image/bmp",
+        ".mp4": "video/mp4", ".mov": "video/quicktime", ".avi": "video/x-msvideo",
+        ".mkv": "video/x-matroska", ".webm": "video/webm",
+    }
+    mimetype = mime_map.get(ext, "application/octet-stream")
+
+    media = MediaFileUpload(filepath, mimetype=mimetype, resumable=True)
+    uploaded = service.files().create(body=file_meta, media_body=media, fields="id, name, webViewLink").execute()
+    # Make viewable by anyone with link
+    service.permissions().create(
+        fileId=uploaded["id"],
+        body={"type": "anyone", "role": "reader"}
+    ).execute()
+    return {
+        "id": uploaded["id"],
+        "name": uploaded["name"],
+        "link": uploaded.get("webViewLink", f"https://drive.google.com/file/d/{uploaded['id']}/view")
+    }
+
+
+# ─────────────────────────────────────────────
 # Config
 # ─────────────────────────────────────────────
 UPLOAD_DIR = Path(tempfile.gettempdir()) / "metadata_tool_uploads"
@@ -685,8 +759,8 @@ def download_url(url, dest_dir):
 
 
 def pipeline_job(job_id, urls, metadata_mode, convert_webp, webp_quality,
-                 resize_opts, custom_meta):
-    """Background pipeline: download URLs -> process metadata -> convert -> resize."""
+                 resize_opts, custom_meta, save_to_drive=False, drive_folder="Media Processada"):
+    """Background pipeline: download URLs -> process metadata -> convert -> resize -> drive."""
     job = jobs[job_id]
     job["status"] = "processing"
     results = []
@@ -765,6 +839,24 @@ def pipeline_job(job_id, urls, metadata_mode, convert_webp, webp_quality,
         results.append(res)
         job["results"] = results
 
+    # Upload to Google Drive if requested
+    if save_to_drive:
+        service = get_drive_service()
+        if service:
+            try:
+                folder_id = drive_find_or_create_folder(service, drive_folder)
+                drive_links = []
+                for r in results:
+                    if r.get("status") == "ok" and r.get("output"):
+                        fpath = str(out_dir / r["output"])
+                        if os.path.exists(fpath):
+                            link_info = drive_upload_file(service, fpath, folder_id)
+                            r["drive_link"] = link_info["link"]
+                            drive_links.append(link_info)
+                job["drive_links"] = drive_links
+            except Exception as e:
+                job["drive_error"] = str(e)
+
     job["status"] = "done"
     job["results"] = results
 
@@ -812,14 +904,57 @@ def process_pipeline():
         "results": []
     }
 
+    save_to_drive = data.get("save_to_drive", False)
+    drive_folder = data.get("drive_folder", "Media Processada")
+
     t = threading.Thread(target=pipeline_job, args=(
         job_id, urls, metadata_mode, convert_webp, webp_quality,
-        resize_opts, custom_meta or None
+        resize_opts, custom_meta or None, save_to_drive, drive_folder
     ))
     t.daemon = True
     t.start()
 
     return jsonify({"job_id": job_id})
+
+
+@app.route("/api/upload-drive", methods=["POST", "OPTIONS"])
+def upload_drive():
+    """Upload processed files from a job to Google Drive."""
+    if request.method == "OPTIONS":
+        return jsonify({}), 200
+
+    data = request.json
+    job_id = data.get("job_id")
+    folder_name = data.get("folder_name", "Media Processada")
+
+    if not job_id:
+        return jsonify({"error": "job_id obrigatorio"}), 400
+
+    service = get_drive_service()
+    if not service:
+        return jsonify({"error": "Google Drive nao configurado. Coloque drive_credentials.json na pasta do projeto."}), 400
+
+    job_dir = OUTPUT_DIR / job_id
+    if not job_dir.exists():
+        return jsonify({"error": "Job nao encontrado"}), 404
+
+    try:
+        folder_id = drive_find_or_create_folder(service, folder_name)
+        links = []
+        for f in job_dir.iterdir():
+            if f.is_file():
+                info = drive_upload_file(service, str(f), folder_id)
+                links.append(info)
+        return jsonify({"success": True, "files": links, "count": len(links)})
+    except Exception as e:
+        return jsonify({"error": f"Erro ao enviar para Drive: {e}"}), 500
+
+
+@app.route("/api/drive-status")
+def drive_status():
+    """Check if Google Drive is configured."""
+    service = get_drive_service()
+    return jsonify({"configured": service is not None})
 
 
 @app.route("/api/extract-links", methods=["POST", "OPTIONS"])

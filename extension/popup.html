@@ -93,6 +93,23 @@
         <input type="number" id="resizeH" placeholder="Altura (px)">
       </div>
     </div>
+
+    <!-- Save Destination -->
+    <div class="option-group">
+      <div class="option-label">Salvar em</div>
+      <div class="checkbox-row">
+        <input type="checkbox" id="chkLocal" checked>
+        <label for="chkLocal">Computador (download)</label>
+      </div>
+      <div class="checkbox-row">
+        <input type="checkbox" id="chkDrive">
+        <label for="chkDrive">Google Drive</label>
+        <span class="source-badge" id="driveStatus" style="margin-left:auto">--</span>
+      </div>
+      <div class="inline-inputs" id="driveFolderRow" style="display:none;">
+        <input type="text" id="driveFolder" placeholder="Nome da pasta no Drive" value="Media Processada">
+      </div>
+    </div>
   </div>
 
   <!-- Actions -->

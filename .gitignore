@@ -4,3 +4,4 @@ __pycache__/
 .claude/
 META_REMOVIDO/
 *.zip
+drive_credentials.json
