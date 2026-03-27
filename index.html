@@ -246,9 +246,9 @@
 
         .file-item {
             display: grid;
-            grid-template-columns: 32px 1fr 100px 100px 80px;
+            grid-template-columns: 32px 1fr 80px 70px 140px;
             align-items: center;
-            gap: 12px;
+            gap: 10px;
             padding: 12px 16px;
             border-bottom: 1px solid var(--border);
             font-size: 13px;
@@ -287,21 +287,38 @@
         .file-actions {
             display: flex;
             gap: 6px;
-            justify-content: center;
+            justify-content: flex-end;
         }
 
         .file-actions a, .file-actions button {
-            color: var(--accent2);
+            color: white;
             text-decoration: none;
-            font-size: 12px;
-            background: none;
-            border: none;
+            font-size: 11px;
+            font-weight: 600;
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: 6px;
             cursor: pointer;
-            padding: 2px 4px;
+            padding: 4px 10px;
+            transition: all 0.2s;
+            white-space: nowrap;
         }
 
-        .file-actions a:hover, .file-actions button:hover {
-            color: var(--accent);
+        .file-actions button {
+            background: rgba(108, 92, 231, 0.2);
+            border-color: var(--accent);
+            color: var(--accent2);
+        }
+
+        .file-actions button:hover {
+            background: var(--accent);
+            color: white;
+        }
+
+        .file-actions a:hover {
+            background: var(--green);
+            border-color: var(--green);
+            color: white;
         }
 
         /* Progress Bar */
@@ -599,8 +616,8 @@
 
         @media (max-width: 768px) {
             .container { padding: 16px; }
-            .file-item { grid-template-columns: 32px 1fr 60px; }
-            .file-item .file-size, .file-item .file-actions { display: none; }
+            .file-item { grid-template-columns: 32px 1fr 50px 140px; }
+            .file-item .file-size { display: none; }
             .form-grid { grid-template-columns: 1fr; }
             .mode-cards { grid-template-columns: 1fr; }
             .comparison-container { grid-template-columns: 1fr; }
