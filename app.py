@@ -7,6 +7,7 @@ Sem perda de qualidade (copy codec para vídeos, qualidade máxima para fotos).
 
 import os
 import sys
+import re
 import shutil
 import random
 import string
@@ -16,12 +17,25 @@ import uuid
 import tempfile
 import threading
 import time
+import urllib.request
+import urllib.error
 from datetime import datetime, timedelta
 from pathlib import Path
 
 from flask import Flask, request, jsonify, send_file, send_from_directory
 
 app = Flask(__name__)
+app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB max upload
+
+
+@app.after_request
+def add_cors(response):
+    origin = request.headers.get("Origin", "")
+    if origin.startswith("chrome-extension://") or origin.startswith("http://localhost"):
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    return response
 
 # ─────────────────────────────────────────────
 # Config
@@ -624,6 +638,275 @@ def verify_metadata(job_id, filename):
         return jsonify({"error": "Arquivo não encontrado"}), 404
     meta = get_file_metadata(str(file_path))
     return jsonify(meta)
+
+
+# ─────────────────────────────────────────────
+# Extension API Endpoints
+# ─────────────────────────────────────────────
+
+@app.route("/api/health")
+def health():
+    return jsonify({"status": "ok", "version": "1.0"})
+
+
+def download_url(url, dest_dir):
+    """Download a file from URL to dest_dir. Returns (filepath, filename)."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "image/*,video/*,*/*",
+        "Referer": url,
+    }
+    req = urllib.request.Request(url, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            # Get filename from URL or Content-Disposition
+            content_disp = resp.headers.get("Content-Disposition", "")
+            if "filename=" in content_disp:
+                fname = content_disp.split("filename=")[-1].strip('"\'')
+            else:
+                fname = url.split("?")[0].split("/")[-1]
+                if not fname or "." not in fname:
+                    ct = resp.headers.get("Content-Type", "image/jpeg")
+                    ext_map = {
+                        "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp",
+                        "image/gif": ".gif", "image/bmp": ".bmp", "image/tiff": ".tiff",
+                        "video/mp4": ".mp4", "video/quicktime": ".mov", "video/webm": ".webm",
+                    }
+                    ext = ext_map.get(ct.split(";")[0].strip(), ".bin")
+                    fname = f"media_{uuid.uuid4().hex[:8]}{ext}"
+            # Sanitize
+            fname = re.sub(r'[^\w\-.]', '_', fname)[:200]
+            dest = Path(dest_dir) / fname
+            with open(str(dest), "wb") as f:
+                shutil.copyfileobj(resp, f)
+            return str(dest), fname
+    except Exception as e:
+        raise ValueError(f"Falha ao baixar {url[:80]}: {e}")
+
+
+def pipeline_job(job_id, urls, metadata_mode, convert_webp, webp_quality,
+                 resize_opts, custom_meta):
+    """Background pipeline: download URLs -> process metadata -> convert -> resize."""
+    job = jobs[job_id]
+    job["status"] = "processing"
+    results = []
+    dl_dir = UPLOAD_DIR / job_id
+    out_dir = OUTPUT_DIR / job_id
+    dl_dir.mkdir(parents=True, exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    for i, url in enumerate(urls):
+        job["current"] = i + 1
+        try:
+            # 1. Download
+            src_path, fname = download_url(url, str(dl_dir))
+            ext = Path(fname).suffix.lower()
+            original_meta = get_friendly_metadata(src_path)
+
+            # 2. Process metadata
+            out_name = Path(fname).stem + "_processed" + ext
+            out_path = str(out_dir / out_name)
+
+            if ext in IMAGE_EXTS:
+                mode = "remove" if metadata_mode == "remove" else "replace"
+                res = process_image(src_path, out_path, mode, custom_meta or None)
+            elif ext in VIDEO_EXTS:
+                mode = "remove" if metadata_mode == "remove" else "replace"
+                res = process_video(src_path, out_path, mode, custom_meta or None)
+            else:
+                # Unknown format — just copy
+                shutil.copy2(src_path, out_path)
+                res = {"status": "ok", "action": "copied"}
+
+            # 3. Convert to WebP (images only)
+            if convert_webp and ext in IMAGE_EXTS and ext != ".gif":
+                from PIL import Image as PILImage
+                webp_name = Path(fname).stem + "_processed.webp"
+                webp_path = str(out_dir / webp_name)
+                img = PILImage.open(out_path)
+                if img.mode in ("RGBA", "LA", "PA"):
+                    img.save(webp_path, "WEBP", quality=webp_quality, lossless=False)
+                else:
+                    img.save(webp_path, "WEBP", quality=webp_quality)
+                # Replace output with webp
+                os.remove(out_path)
+                out_path = webp_path
+                out_name = webp_name
+
+            # 4. Resize (images only)
+            if resize_opts and ext in IMAGE_EXTS:
+                from PIL import Image as PILImage
+                img = PILImage.open(out_path)
+                w = resize_opts.get("width", 0)
+                h = resize_opts.get("height", 0)
+                if w or h:
+                    if resize_opts.get("maintain_aspect", True):
+                        target_w = w or 99999
+                        target_h = h or 99999
+                        img.thumbnail((target_w, target_h), PILImage.LANCZOS)
+                    else:
+                        if w and h:
+                            img = img.resize((w, h), PILImage.LANCZOS)
+                    save_ext = Path(out_path).suffix.lower()
+                    save_image_lossless(img, out_path, save_ext)
+
+            new_meta = get_friendly_metadata(out_path)
+            res["file"] = fname
+            res["output"] = Path(out_path).name
+            res["original_size"] = os.path.getsize(src_path)
+            res["output_size"] = os.path.getsize(out_path)
+            res["original_meta"] = original_meta
+            res["new_meta"] = new_meta
+            res["url"] = url
+
+        except Exception as e:
+            res = {"status": "error", "file": url.split("/")[-1][:60], "msg": str(e), "url": url}
+
+        results.append(res)
+        job["results"] = results
+
+    job["status"] = "done"
+    job["results"] = results
+
+
+@app.route("/api/process-pipeline", methods=["POST", "OPTIONS"])
+def process_pipeline():
+    """Extension endpoint: download URLs, process metadata, convert, resize."""
+    if request.method == "OPTIONS":
+        return jsonify({}), 200
+
+    data = request.json
+    urls = data.get("urls", [])
+    if not urls:
+        return jsonify({"error": "Nenhuma URL fornecida"}), 400
+
+    job_id = str(uuid.uuid4())[:8]
+    metadata_mode = data.get("metadata_mode", "remove")
+    convert_webp = data.get("convert_webp", False)
+    webp_quality = data.get("webp_quality", 85)
+    resize_opts = data.get("resize")
+    custom_meta = {}
+
+    cm = data.get("custom_meta", {})
+    if cm.get("camera"):
+        custom_meta["camera"] = cm["camera"]
+    if cm.get("software"):
+        custom_meta["software"] = cm["software"]
+    if cm.get("date"):
+        try:
+            dt = datetime.strptime(cm["date"], "%Y-%m-%d")
+            dt = dt.replace(hour=random.randint(8, 20), minute=random.randint(0, 59))
+            custom_meta["date"] = (dt.strftime("%Y:%m:%d %H:%M:%S"), dt)
+        except ValueError:
+            pass
+    if cm.get("lat") and cm.get("lon"):
+        try:
+            custom_meta["gps"] = (float(cm["lat"]), float(cm["lon"]), "Custom")
+        except ValueError:
+            pass
+
+    jobs[job_id] = {
+        "status": "queued",
+        "total": len(urls),
+        "current": 0,
+        "results": []
+    }
+
+    t = threading.Thread(target=pipeline_job, args=(
+        job_id, urls, metadata_mode, convert_webp, webp_quality,
+        resize_opts, custom_meta or None
+    ))
+    t.daemon = True
+    t.start()
+
+    return jsonify({"job_id": job_id})
+
+
+@app.route("/api/extract-links", methods=["POST", "OPTIONS"])
+def extract_links():
+    """Extract media URLs from a page URL (Instagram, TikTok, Facebook, etc.)."""
+    if request.method == "OPTIONS":
+        return jsonify({}), 200
+
+    data = request.json
+    url = data.get("url", "").strip()
+    if not url:
+        return jsonify({"error": "URL não fornecida"}), 400
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,*/*",
+        "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8",
+    }
+
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            html = resp.read().decode("utf-8", errors="ignore")
+    except Exception as e:
+        return jsonify({"error": f"Falha ao acessar URL: {e}"}), 400
+
+    media = []
+    seen = set()
+
+    def add_media(u, mtype="image", source=""):
+        if not u or u in seen or len(u) < 10:
+            return
+        if u.startswith("//"):
+            u = "https:" + u
+        elif u.startswith("/"):
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            u = f"{parsed.scheme}://{parsed.netloc}{u}"
+        # Filter out tiny/tracking
+        skip_patterns = ["1x1", "pixel", "spacer", "blank", "data:image", ".svg", "emoji"]
+        if any(p in u.lower() for p in skip_patterns):
+            return
+        seen.add(u)
+        media.append({"url": u, "type": mtype, "source": source})
+
+    # og:image, og:video
+    for match in re.finditer(r'<meta[^>]+property=["\']og:(image|video)["\'][^>]+content=["\'](.*?)["\']', html, re.I):
+        mtype = "image" if match.group(1) == "image" else "video"
+        add_media(match.group(2), mtype, "og:" + match.group(1))
+    # Also reversed attribute order
+    for match in re.finditer(r'<meta[^>]+content=["\'](.*?)["\'][^>]+property=["\']og:(image|video)["\']', html, re.I):
+        mtype = "image" if match.group(2) == "image" else "video"
+        add_media(match.group(1), mtype, "og:" + match.group(2))
+
+    # twitter:image
+    for match in re.finditer(r'<meta[^>]+(?:name|property)=["\']twitter:image["\'][^>]+content=["\'](.*?)["\']', html, re.I):
+        add_media(match.group(1), "image", "twitter:image")
+
+    # img src
+    for match in re.finditer(r'<img[^>]+src=["\'](.*?)["\']', html, re.I):
+        add_media(match.group(1), "image", "img")
+
+    # video src and source src
+    for match in re.finditer(r'<(?:video|source)[^>]+src=["\'](.*?)["\']', html, re.I):
+        add_media(match.group(1), "video", "video")
+
+    # srcset
+    for match in re.finditer(r'srcset=["\'](.*?)["\']', html, re.I):
+        for part in match.group(1).split(","):
+            src = part.strip().split()[0]
+            if src:
+                add_media(src, "image", "srcset")
+
+    # JSON-LD / data in scripts (Instagram, TikTok embed data)
+    for match in re.finditer(r'"(https?://[^"]+\.(?:jpg|jpeg|png|webp|mp4|mov)[^"]*)"', html, re.I):
+        add_media(match.group(1), "video" if match.group(1).lower().endswith((".mp4", ".mov")) else "image", "json")
+
+    # High-res image patterns common in social media
+    for match in re.finditer(r'"(https?://(?:scontent|video)[^"]+)"', html, re.I):
+        u = match.group(1).replace("\\u0026", "&").replace("\\/", "/")
+        mtype = "video" if "/video" in u.lower() else "image"
+        add_media(u, mtype, "cdn")
+
+    if not media:
+        return jsonify({"error": "Nenhuma midia encontrada nesta URL"}), 404
+
+    return jsonify({"url": url, "media": media, "count": len(media)})
 
 
 if __name__ == "__main__":

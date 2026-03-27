@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+  <div class="header-left">
+    <div class="header-icon">DL</div>
+    <div>
+      <h1>Media Downloader</h1>
+      <p>Download + Metadados + WebP</p>
+    </div>
+  </div>
+  <div class="server-status">
+    <span class="status-dot" id="statusDot"></span>
+    <span id="statusText">Offline</span>
+  </div>
+</div>
+
+<!-- URL Input -->
+<div class="section">
+  <div class="section-title">Colar Link (Instagram, TikTok, Facebook, etc.)</div>
+  <div class="url-row">
+    <input type="text" id="urlInput" placeholder="https://www.instagram.com/p/ABC123/">
+    <button class="btn btn-primary btn-sm" id="btnExtract">Extrair</button>
+  </div>
+</div>
+
+<!-- Scan -->
+<div class="section">
+  <button class="btn btn-outline btn-full" id="btnScan">Escanear Pagina Atual</button>
+</div>
+
+<!-- Media List -->
+<div class="section" id="mediaSection" style="display:none;">
+  <div class="selection-bar">
+    <span class="selection-count" id="selCount">0 selecionados</span>
+    <div class="selection-actions">
+      <button class="btn btn-outline btn-sm" id="btnSelectAll">Todos</button>
+      <button class="btn btn-outline btn-sm" id="btnDeselectAll">Nenhum</button>
+    </div>
+  </div>
+  <div class="media-grid" id="mediaGrid"></div>
+
+  <!-- Options -->
+  <button class="options-toggle" id="optionsToggle">
+    <span>Opcoes de Processamento</span>
+    <span id="toggleArrow">+</span>
+  </button>
+  <div class="options-panel" id="optionsPanel">
+    <!-- Metadata Mode -->
+    <div class="option-group">
+      <div class="option-label">Metadados</div>
+      <div class="radio-group" id="metaMode">
+        <div class="radio-btn active" data-value="none">Nenhum</div>
+        <div class="radio-btn" data-value="remove">Remover</div>
+        <div class="radio-btn" data-value="replace">Substituir</div>
+        <div class="radio-btn" data-value="custom">Custom</div>
+      </div>
+      <div class="custom-fields" id="customFields">
+        <input type="text" id="optCamera" placeholder="Camera (ex: iPhone 15 Pro)">
+        <input type="text" id="optSoftware" placeholder="Software (ex: Lightroom)">
+        <input type="date" id="optDate">
+        <input type="text" id="optGPS" placeholder="GPS: -23.55, -46.63">
+      </div>
+    </div>
+
+    <!-- Convert WebP -->
+    <div class="option-group">
+      <div class="checkbox-row">
+        <input type="checkbox" id="chkWebp">
+        <label for="chkWebp">Converter para WebP</label>
+      </div>
+      <div class="slider-row" id="webpSlider" style="display:none;">
+        <span style="font-size:10px;color:var(--text2)">Qualidade:</span>
+        <input type="range" id="webpQuality" min="1" max="100" value="85">
+        <span class="value" id="webpValue">85</span>
+      </div>
+    </div>
+
+    <!-- Resize -->
+    <div class="option-group">
+      <div class="checkbox-row">
+        <input type="checkbox" id="chkResize">
+        <label for="chkResize">Redimensionar</label>
+      </div>
+      <div class="inline-inputs" id="resizeInputs" style="display:none;">
+        <input type="number" id="resizeW" placeholder="Largura (px)">
+        <input type="number" id="resizeH" placeholder="Altura (px)">
+      </div>
+    </div>
+  </div>
+
+  <!-- Actions -->
+  <div class="actions">
+    <button class="btn btn-outline" id="btnDirectDL" style="flex:1" disabled>Baixar Direto</button>
+    <button class="btn btn-success" id="btnProcessDL" style="flex:1" disabled>Processar e Baixar</button>
+  </div>
+
+  <!-- Progress -->
+  <div class="progress-section" id="progressSection">
+    <div class="progress-bar-bg">
+      <div class="progress-bar-fill" id="progressFill"></div>
+    </div>
+    <div class="progress-text">
+      <span id="progressText">Processando...</span>
+      <span id="progressPct">0%</span>
+    </div>
+  </div>
+</div>
+
+<!-- Empty State -->
+<div class="empty-state" id="emptyState">
+  <div class="icon">🔍</div>
+  <p>Clique em "Escanear" para detectar midias<br>ou cole um link acima</p>
+</div>
+
+<script src="popup.js"></script>
+</body>
+</html>
