@@ -264,6 +264,124 @@ def process_video(input_path, output_path, mode, custom_meta=None):
     }
 
 
+def get_friendly_metadata(filepath):
+    """Get metadata in a clean, human-readable dict with friendly labels."""
+    ext = Path(filepath).suffix.lower()
+    meta = {}
+
+    if ext in IMAGE_EXTS:
+        try:
+            import piexif
+            LABELS = {
+                piexif.ImageIFD.Make: "Fabricante",
+                piexif.ImageIFD.Model: "Modelo/Camera",
+                piexif.ImageIFD.Software: "Software",
+                piexif.ImageIFD.DateTime: "Data/Hora",
+                piexif.ImageIFD.Artist: "Artista",
+                piexif.ImageIFD.Copyright: "Copyright",
+            }
+            EXIF_LABELS = {
+                piexif.ExifIFD.DateTimeOriginal: "Data Original",
+                piexif.ExifIFD.DateTimeDigitized: "Data Digitalizada",
+                piexif.ExifIFD.LensModel: "Lente",
+                piexif.ExifIFD.ISOSpeedRatings: "ISO",
+                piexif.ExifIFD.FNumber: "Abertura (f/)",
+                piexif.ExifIFD.ExposureTime: "Velocidade",
+                piexif.ExifIFD.FocalLength: "Distancia Focal",
+                piexif.ExifIFD.Flash: "Flash",
+            }
+            GPS_LABELS = {
+                piexif.GPSIFD.GPSLatitudeRef: "Latitude Ref",
+                piexif.GPSIFD.GPSLatitude: "Latitude",
+                piexif.GPSIFD.GPSLongitudeRef: "Longitude Ref",
+                piexif.GPSIFD.GPSLongitude: "Longitude",
+                piexif.GPSIFD.GPSAltitude: "Altitude",
+            }
+            exif = piexif.load(filepath)
+            for tag, label in LABELS.items():
+                val = exif.get("0th", {}).get(tag)
+                if val is not None:
+                    meta[label] = val.decode(errors="ignore") if isinstance(val, bytes) else str(val)
+            for tag, label in EXIF_LABELS.items():
+                val = exif.get("Exif", {}).get(tag)
+                if val is not None:
+                    if isinstance(val, bytes):
+                        meta[label] = val.decode(errors="ignore")
+                    elif isinstance(val, tuple) and len(val) == 2:
+                        meta[label] = f"{val[0]}/{val[1]}"
+                    else:
+                        meta[label] = str(val)
+            for tag, label in GPS_LABELS.items():
+                val = exif.get("GPS", {}).get(tag)
+                if val is not None:
+                    if isinstance(val, bytes):
+                        meta[label] = val.decode(errors="ignore")
+                    elif isinstance(val, list):
+                        degs = sum(n/d * (60**-i) for i, (n, d) in enumerate(val) if d != 0)
+                        meta[label] = f"{degs:.6f}"
+                    elif isinstance(val, tuple) and len(val) == 2:
+                        meta[label] = f"{val[0]}/{val[1]}"
+                    else:
+                        meta[label] = str(val)
+        except Exception:
+            pass
+        try:
+            from PIL import Image
+            img = Image.open(filepath)
+            meta["Dimensoes"] = f"{img.width}x{img.height}"
+            meta["Formato"] = img.format or ext.upper()
+        except Exception:
+            pass
+
+    elif ext in VIDEO_EXTS:
+        TAG_LABELS = {
+            "creation_time": "Data de Criacao",
+            "date": "Data",
+            "make": "Fabricante",
+            "model": "Modelo/Camera",
+            "software": "Software",
+            "location": "Localizacao GPS",
+            "location-eng": "Localizacao GPS (eng)",
+            "encoder": "Encoder",
+            "com.apple.quicktime.make": "Apple Make",
+            "com.apple.quicktime.model": "Apple Model",
+            "com.apple.quicktime.creationdate": "Apple Data Criacao",
+            "major_brand": "Formato (brand)",
+            "compatible_brands": "Formatos Compativeis",
+            "minor_version": "Versao Minor",
+        }
+        try:
+            result = subprocess.run(
+                [FFPROBE, "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", filepath],
+                capture_output=True, text=True, timeout=30
+            )
+            if result.returncode == 0:
+                info = json.loads(result.stdout)
+                fmt = info.get("format", {})
+                meta["Duracao"] = f"{float(fmt.get('duration', 0)):.1f}s"
+                meta["Bitrate"] = f"{int(fmt.get('bit_rate', 0)) // 1000} kbps"
+                meta["Tamanho"] = f"{int(fmt.get('size', 0)) / 1024 / 1024:.2f} MB"
+                tags = fmt.get("tags", {})
+                for k, v in tags.items():
+                    label = TAG_LABELS.get(k, k)
+                    meta[label] = str(v)[:100]
+                for stream in info.get("streams", []):
+                    if stream.get("codec_type") == "video":
+                        meta["Dimensoes"] = f"{stream.get('width', '?')}x{stream.get('height', '?')}"
+                        meta["Codec Video"] = stream.get("codec_name", "?")
+                        meta["FPS"] = stream.get("r_frame_rate", "?")
+                    elif stream.get("codec_type") == "audio":
+                        meta["Codec Audio"] = stream.get("codec_name", "?")
+                        meta["Sample Rate"] = f"{stream.get('sample_rate', '?')} Hz"
+        except Exception:
+            pass
+
+    if not meta:
+        meta["Info"] = "Nenhum metadado encontrado"
+
+    return meta
+
+
 def process_job(job_id, files_info, mode, custom_meta):
     """Background processing of files."""
     job = jobs[job_id]
@@ -278,6 +396,9 @@ def process_job(job_id, files_info, mode, custom_meta):
         out_path = OUTPUT_DIR / job_id / out_name
         (OUTPUT_DIR / job_id).mkdir(parents=True, exist_ok=True)
 
+        # Capture original metadata BEFORE processing
+        original_meta = get_friendly_metadata(str(src))
+
         try:
             if ext in IMAGE_EXTS:
                 res = process_image(str(src), str(out_path), mode, custom_meta)
@@ -290,6 +411,14 @@ def process_job(job_id, files_info, mode, custom_meta):
             res["output"] = out_name
             res["output_size"] = os.path.getsize(out_path) if out_path.exists() else 0
             res["original_size"] = finfo.get("size", 0)
+            res["original_meta"] = original_meta
+
+            # Capture NEW metadata AFTER processing
+            if out_path.exists():
+                res["new_meta"] = get_friendly_metadata(str(out_path))
+            else:
+                res["new_meta"] = {}
+
         except Exception as e:
             res = {"status": "error", "file": src.name, "msg": str(e)}
 
