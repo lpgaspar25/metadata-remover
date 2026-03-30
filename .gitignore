@@ -5,3 +5,5 @@ __pycache__/
 META_REMOVIDO/
 *.zip
 drive_credentials.json
+test_original.jpg
+test_output/
