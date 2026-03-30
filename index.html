@@ -949,6 +949,21 @@
         custom.classList.toggle('visible', currentMode === 'custom');
     }
 
+    // Ensure Facebook bypass card exists (fallback for cached HTML)
+    (function injectFacebookCard() {
+        const container = document.querySelector('.mode-cards');
+        if (!container) return;
+        if (container.querySelector('[data-mode="facebook"]')) return;
+        const card = document.createElement('div');
+        card.className = 'mode-card';
+        card.dataset.mode = 'facebook';
+        card.onclick = function() { selectMode(this); };
+        card.style.cssText = 'border: 2px solid #e17055; background: rgba(225, 112, 85, 0.08);';
+        card.innerHTML = '<h3 style="color: #e17055;">Bypass Facebook / Ads</h3><p>Remove metadados + altera pixels imperceptivelmente para burlar detecção por hash perceptual (pHash), fingerprinting. <strong>Facebook, Instagram, Google Ads.</strong></p>';
+        container.insertBefore(card, container.firstChild);
+    })();
+
+
     // ── Pre-processing metadata view ──
     function showMeta(idx) {
         const f = files[idx];
