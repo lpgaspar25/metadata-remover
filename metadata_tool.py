@@ -15,13 +15,19 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 try:
-    from PIL import Image
+    from PIL import Image, ImageEnhance
     import piexif
 except ImportError:
     print("Instalando dependências...")
-    os.system(f"{sys.executable} -m pip install Pillow piexif mutagen -q")
-    from PIL import Image
+    os.system(f"{sys.executable} -m pip install Pillow piexif mutagen numpy -q")
+    from PIL import Image, ImageEnhance
     import piexif
+
+try:
+    import numpy as np
+except ImportError:
+    os.system(f"{sys.executable} -m pip install numpy -q")
+    import numpy as np
 
 try:
     from mutagen import File as MutagenFile
@@ -98,6 +104,55 @@ def make_output_path(input_path: Path, output_dir: Path) -> Path:
 # ─────────────────────────────────────────────
 # Processamento de IMAGENS
 # ─────────────────────────────────────────────
+
+def process_image_facebook(input_path: Path, output_path: Path):
+    """Bypass Facebook/Ads detection: strip metadata + alter pixels imperceptibly.
+
+    Techniques applied:
+    1. Strip ALL metadata (EXIF, IPTC, XMP, ICC, thumbnails)
+    2. Add imperceptible noise (±2 per channel) to defeat perceptual hashing
+    3. Random micro-crop (1-3px per side) to change dimensions
+    4. Slight brightness/contrast shift
+    5. Re-encode with varied quality to change file hash
+    """
+    ext = input_path.suffix.lower()
+    img = Image.open(input_path)
+
+    if img.mode == "P":
+        img = img.convert("RGBA")
+    elif img.mode not in ("RGB", "RGBA"):
+        img = img.convert("RGB")
+
+    # Copy pixels and add noise
+    pixels = np.array(img)
+    noise = np.random.randint(-2, 3, size=pixels.shape, dtype=np.int16)
+    pixels = np.clip(pixels.astype(np.int16) + noise, 0, 255).astype(np.uint8)
+    clean = Image.fromarray(pixels, img.mode)
+
+    # Micro-crop
+    w, h = clean.size
+    cl, ct, cr, cb = random.randint(1, 3), random.randint(1, 3), random.randint(1, 3), random.randint(1, 3)
+    if w > (cl + cr + 50) and h > (ct + cb + 50):
+        clean = clean.crop((cl, ct, w - cr, h - cb))
+
+    # Brightness/contrast shift
+    clean = ImageEnhance.Brightness(clean).enhance(random.uniform(0.985, 1.015))
+    clean = ImageEnhance.Contrast(clean).enhance(random.uniform(0.985, 1.015))
+
+    # Re-encode
+    if ext in (".jpg", ".jpeg"):
+        clean.save(output_path, "JPEG", quality=random.randint(92, 97), subsampling=0)
+    elif ext == ".png":
+        clean.save(output_path, "PNG", compress_level=random.randint(1, 3))
+    elif ext == ".webp":
+        clean.save(output_path, "WEBP", quality=random.randint(90, 97))
+    else:
+        clean.save(output_path)
+
+    new_w, new_h = clean.size
+    print(f"  [FOTO] Facebook Bypass → {output_path.name}")
+    print(f"         Ruído: ±2/canal | Crop: {cl},{ct},{cr},{cb}px | Dimensão: {new_w}x{new_h}")
+
 
 def process_image(input_path: Path, output_path: Path, new_meta: dict, mode: str):
     """Remove ou substitui metadados de imagem."""
@@ -250,6 +305,7 @@ def choose_mode():
     print("  [1] Remover todos os metadados (limpo)")
     print("  [2] Substituir por metadados novos aleatórios")
     print("  [3] Substituir com dados personalizados")
+    print("  [4] Bypass Facebook / Google Ads (anti-detecção)")
     print("  [0] Sair")
     choice = input("\nOpção: ").strip()
     return choice
@@ -320,6 +376,9 @@ def main():
         elif mode_choice == "3":
             mode = "replace"
             custom_meta = get_custom_meta()
+        elif mode_choice == "4":
+            mode = "facebook"
+            custom_meta = {}
         else:
             print("Opção inválida.\n")
             continue
@@ -348,21 +407,31 @@ def main():
             out = make_output_path(f, output_dir)
             try:
                 if ext in IMAGE_EXTS:
-                    meta = dict(custom_meta)
-                    if mode == "replace" and "date" not in meta:
-                        meta["date"] = random_date()
-                    if mode == "replace" and "gps" not in meta:
-                        meta["gps"] = random_gps()
-                    process_image(f, out, meta, mode)
-                    ok += 1
+                    if mode == "facebook":
+                        process_image_facebook(f, out)
+                        ok += 1
+                    else:
+                        meta = dict(custom_meta)
+                        if mode == "replace" and "date" not in meta:
+                            meta["date"] = random_date()
+                        if mode == "replace" and "gps" not in meta:
+                            meta["gps"] = random_gps()
+                        process_image(f, out, meta, mode)
+                        ok += 1
                 elif ext in VIDEO_EXTS:
-                    meta = dict(custom_meta)
-                    if mode == "replace" and "date" not in meta:
-                        meta["date"] = random_date()
-                    if mode == "replace" and "gps" not in meta:
-                        meta["gps"] = random_gps()
-                    process_video(f, out, meta, mode)
-                    ok += 1
+                    if mode == "facebook":
+                        # For videos, facebook mode just strips all metadata
+                        process_video(f, out, {}, "remove")
+                        print(f"         (Facebook Bypass: metadados removidos)")
+                        ok += 1
+                    else:
+                        meta = dict(custom_meta)
+                        if mode == "replace" and "date" not in meta:
+                            meta["date"] = random_date()
+                        if mode == "replace" and "gps" not in meta:
+                            meta["gps"] = random_gps()
+                        process_video(f, out, meta, mode)
+                        ok += 1
                 else:
                     print(f"  [SKIP] Formato não suportado: {f.name}")
             except Exception as e:

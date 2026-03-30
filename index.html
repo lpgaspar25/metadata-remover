@@ -667,6 +667,10 @@
                 <h3>Personalizado</h3>
                 <p>Você escolhe a câmera, data, GPS e software que serão inseridos nos arquivos.</p>
             </div>
+            <div class="mode-card" data-mode="facebook" onclick="selectMode(this)" style="border-color: #e17055;">
+                <h3>Bypass Facebook / Ads</h3>
+                <p>Remove metadados + altera pixels imperceptivelmente para burlar detecção por hash perceptual (pHash), hash de arquivo e fingerprinting de plataformas como Facebook, Instagram e Google Ads.</p>
+            </div>
         </div>
 
         <div class="custom-options" id="customOptions">
@@ -1029,7 +1033,15 @@
         const strip = document.getElementById('verificationStrip');
         const vText = document.getElementById('verificationText');
 
-        if (r.action === 'removed') {
+        if (r.action === 'facebook_bypass') {
+            strip.className = 'verification-strip success';
+            strip.querySelector('.v-icon').textContent = '✓';
+            let details = [];
+            if (r.noise) details.push(`Ruído: ${r.noise}`);
+            if (r.crop) details.push(`Crop: ${r.crop}`);
+            if (r.new_dimensions) details.push(`Nova dimensão: ${r.new_dimensions}`);
+            vText.textContent = `Facebook Bypass aplicado — Metadados limpos + pixels alterados + micro-crop. ${details.join(' | ')}`;
+        } else if (r.action === 'removed') {
             if (removed > 0 && added === 0) {
                 strip.className = 'verification-strip success';
                 strip.querySelector('.v-icon').textContent = '✓';
@@ -1066,7 +1078,7 @@
 
         const payload = {
             job_id: currentJobId,
-            mode: currentMode === 'custom' ? 'replace' : currentMode,
+            mode: currentMode === 'custom' ? 'replace' : currentMode,  // remove | replace | facebook
             files: files.map(f => ({ path: f.path, name: f.name, size: f.size }))
         };
 

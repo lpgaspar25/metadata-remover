@@ -284,6 +284,75 @@ def save_image_lossless(img, output_path, ext, exif_bytes=None):
         img.save(output_path)
 
 
+def process_image_facebook(input_path, output_path):
+    """Process image to bypass Facebook detection algorithms.
+
+    Applies multiple techniques:
+    1. Strip ALL metadata (EXIF, IPTC, XMP, ICC profiles, thumbnails)
+    2. Add imperceptible pixel noise (defeats perceptual hashing - pHash/dHash)
+    3. Random micro-crop (1-3px per side, changes image dimensions/hash)
+    4. Slight brightness/contrast shift (further alters perceptual hash)
+    5. Re-encode with varied quality (changes file hash MD5/SHA)
+    """
+    from PIL import Image, ImageEnhance
+    import numpy as np
+
+    ext = Path(input_path).suffix.lower()
+    img = Image.open(input_path)
+
+    # Ensure RGB/RGBA mode (strip palette modes that carry extra data)
+    if img.mode == "P":
+        img = img.convert("RGBA")
+    elif img.mode not in ("RGB", "RGBA"):
+        img = img.convert("RGB")
+
+    # 1. Strip ALL metadata by copying raw pixel data to a clean image
+    pixels = np.array(img)
+
+    # 2. Add imperceptible random noise (±2 per channel, invisible to human eye)
+    noise = np.random.randint(-2, 3, size=pixels.shape, dtype=np.int16)
+    pixels = np.clip(pixels.astype(np.int16) + noise, 0, 255).astype(np.uint8)
+
+    clean = Image.fromarray(pixels, img.mode)
+
+    # 3. Random micro-crop (1-3px from each side)
+    w, h = clean.size
+    crop_left = random.randint(1, 3)
+    crop_top = random.randint(1, 3)
+    crop_right = random.randint(1, 3)
+    crop_bottom = random.randint(1, 3)
+    if w > (crop_left + crop_right + 50) and h > (crop_top + crop_bottom + 50):
+        clean = clean.crop((crop_left, crop_top, w - crop_right, h - crop_bottom))
+
+    # 4. Slight brightness & contrast shift (imperceptible, 0.5-1.5% variation)
+    brightness_factor = random.uniform(0.985, 1.015)
+    contrast_factor = random.uniform(0.985, 1.015)
+    clean = ImageEnhance.Brightness(clean).enhance(brightness_factor)
+    clean = ImageEnhance.Contrast(clean).enhance(contrast_factor)
+
+    # 5. Re-encode with slightly randomized quality (breaks file-level hash)
+    if ext in (".jpg", ".jpeg"):
+        quality = random.randint(92, 97)
+        clean.save(output_path, "JPEG", quality=quality, subsampling=0)
+    elif ext == ".png":
+        clean.save(output_path, "PNG", compress_level=random.randint(1, 3))
+    elif ext == ".webp":
+        clean.save(output_path, "WEBP", quality=random.randint(90, 97))
+    else:
+        clean.save(output_path)
+
+    new_w, new_h = clean.size
+    return {
+        "status": "ok",
+        "action": "facebook_bypass",
+        "noise": "±2 per channel",
+        "crop": f"{crop_left}px,{crop_top}px,{crop_right}px,{crop_bottom}px",
+        "brightness": f"{brightness_factor:.3f}",
+        "contrast": f"{contrast_factor:.3f}",
+        "new_dimensions": f"{new_w}x{new_h}",
+    }
+
+
 def process_image(input_path, output_path, mode, custom_meta=None):
     """Process image without quality loss."""
     from PIL import Image
@@ -291,6 +360,9 @@ def process_image(input_path, output_path, mode, custom_meta=None):
 
     ext = Path(input_path).suffix.lower()
     img = Image.open(input_path)
+
+    if mode == "facebook":
+        return process_image_facebook(input_path, output_path)
 
     if mode == "remove":
         if ext == ".gif" and getattr(img, "is_animated", False):
@@ -546,7 +618,12 @@ def process_job(job_id, files_info, mode, custom_meta):
             if ext in IMAGE_EXTS:
                 res = process_image(str(src), str(out_path), mode, custom_meta)
             elif ext in VIDEO_EXTS:
-                res = process_video(str(src), str(out_path), mode, custom_meta)
+                if mode == "facebook":
+                    # For videos, facebook mode strips all metadata
+                    res = process_video(str(src), str(out_path), "remove", None)
+                    res["action"] = "facebook_bypass"
+                else:
+                    res = process_video(str(src), str(out_path), mode, custom_meta)
             else:
                 res = {"status": "skipped", "msg": "Formato não suportado"}
 
@@ -642,7 +719,7 @@ def start_processing():
     """Start processing uploaded files."""
     data = request.json
     job_id = data.get("job_id", str(uuid.uuid4())[:8])
-    mode = data.get("mode", "remove")  # remove | replace
+    mode = data.get("mode", "remove")  # remove | replace | facebook
     files_info = data.get("files", [])
     custom_meta = {}
 
@@ -782,11 +859,18 @@ def pipeline_job(job_id, urls, metadata_mode, convert_webp, webp_quality,
             out_path = str(out_dir / out_name)
 
             if ext in IMAGE_EXTS:
-                mode = "remove" if metadata_mode == "remove" else "replace"
-                res = process_image(src_path, out_path, mode, custom_meta or None)
+                if metadata_mode == "facebook":
+                    res = process_image_facebook(src_path, out_path)
+                else:
+                    mode = "remove" if metadata_mode == "remove" else "replace"
+                    res = process_image(src_path, out_path, mode, custom_meta or None)
             elif ext in VIDEO_EXTS:
-                mode = "remove" if metadata_mode == "remove" else "replace"
-                res = process_video(src_path, out_path, mode, custom_meta or None)
+                if metadata_mode == "facebook":
+                    res = process_video(src_path, out_path, "remove", None)
+                    res["action"] = "facebook_bypass"
+                else:
+                    mode = "remove" if metadata_mode == "remove" else "replace"
+                    res = process_video(src_path, out_path, mode, custom_meta or None)
             else:
                 # Unknown format — just copy
                 shutil.copy2(src_path, out_path)
