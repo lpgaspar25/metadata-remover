@@ -29,12 +29,16 @@ app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500MB max upload
 
 
 @app.after_request
-def add_cors(response):
+def add_headers(response):
     origin = request.headers.get("Origin", "")
     if origin.startswith("chrome-extension://") or origin.startswith("http://localhost"):
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Access-Control-Allow-Headers"] = "Content-Type"
         response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    # Disable caching for HTML
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
     return response
 
 # ─────────────────────────────────────────────

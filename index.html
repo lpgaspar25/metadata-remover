@@ -655,21 +655,21 @@
     <div class="mode-section" id="modeSection" style="display:none;">
         <h2>Modo de Operação</h2>
         <div class="mode-cards">
+            <div class="mode-card" data-mode="facebook" onclick="selectMode(this)" style="border: 2px solid #e17055; background: rgba(225, 112, 85, 0.08);">
+                <h3 style="color: #e17055;">Bypass Facebook / Ads</h3>
+                <p>Remove metadados + altera pixels imperceptivelmente para burlar detecção por hash perceptual (pHash), fingerprinting. <strong>Facebook, Instagram, Google Ads.</strong></p>
+            </div>
             <div class="mode-card active" data-mode="remove" onclick="selectMode(this)">
                 <h3>Remover Tudo</h3>
                 <p>Remove todos os metadados. O arquivo fica completamente limpo, sem rastros de câmera, data, GPS, software.</p>
             </div>
             <div class="mode-card" data-mode="replace" onclick="selectMode(this)">
                 <h3>Substituir Aleatório</h3>
-                <p>Substitui por metadados totalmente novos e aleatórios: câmera, data, localização GPS, software diferentes.</p>
+                <p>Substitui por metadados novos e aleatórios: câmera, data, GPS, software diferentes.</p>
             </div>
             <div class="mode-card" data-mode="custom" onclick="selectMode(this)">
                 <h3>Personalizado</h3>
-                <p>Você escolhe a câmera, data, GPS e software que serão inseridos nos arquivos.</p>
-            </div>
-            <div class="mode-card" data-mode="facebook" onclick="selectMode(this)" style="border-color: #e17055; background: rgba(225, 112, 85, 0.06);">
-                <h3 style="color: #e17055;">Bypass Facebook / Ads</h3>
-                <p>Remove metadados + altera pixels imperceptivelmente para burlar detecção por hash perceptual (pHash), hash de arquivo e fingerprinting. <strong>Facebook, Instagram, Google Ads.</strong></p>
+                <p>Você escolhe a câmera, data, GPS e software que serão inseridos.</p>
             </div>
         </div>
 
