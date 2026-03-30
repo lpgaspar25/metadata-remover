@@ -284,73 +284,187 @@ def save_image_lossless(img, output_path, ext, exif_bytes=None):
         img.save(output_path)
 
 
-def process_image_facebook(input_path, output_path):
-    """Process image to bypass Facebook detection algorithms.
-
-    Applies multiple techniques:
-    1. Strip ALL metadata (EXIF, IPTC, XMP, ICC profiles, thumbnails)
-    2. Add imperceptible pixel noise (defeats perceptual hashing - pHash/dHash)
-    3. Random micro-crop (1-3px per side, changes image dimensions/hash)
-    4. Slight brightness/contrast shift (further alters perceptual hash)
-    5. Re-encode with varied quality (changes file hash MD5/SHA)
-    """
+def _apply_facebook_bypass(input_path, output_path):
+    """Core Facebook bypass processing (single attempt)."""
     from PIL import Image, ImageEnhance
     import numpy as np
 
     ext = Path(input_path).suffix.lower()
     img = Image.open(input_path)
 
-    # Ensure RGB/RGBA mode (strip palette modes that carry extra data)
-    if img.mode == "P":
-        img = img.convert("RGBA")
-    elif img.mode not in ("RGB", "RGBA"):
+    # Ensure RGB mode (strip palette, alpha, ICC profile data)
+    if img.mode != "RGB":
         img = img.convert("RGB")
 
-    # 1. Strip ALL metadata by copying raw pixel data to a clean image
-    pixels = np.array(img)
+    w, h = img.size
 
-    # 2. Add imperceptible random noise (±2 per channel, invisible to human eye)
-    noise = np.random.randint(-2, 3, size=pixels.shape, dtype=np.int16)
-    pixels = np.clip(pixels.astype(np.int16) + noise, 0, 255).astype(np.uint8)
+    # 1. Strip metadata: copy raw pixels to new image
+    pixels = np.array(img, dtype=np.float64)
 
-    clean = Image.fromarray(pixels, img.mode)
+    # 2. Block-level color shifts — defeats pHash and dHash (DCT-based)
+    block_h = max(h // 8, 1)
+    block_w = max(w // 8, 1)
+    for by in range(0, h, block_h):
+        for bx in range(0, w, block_w):
+            shift = np.random.uniform(-16, 16, size=3)
+            pixels[by:by+block_h, bx:bx+block_w] += shift
 
-    # 3. Random micro-crop (1-3px from each side)
-    w, h = clean.size
-    crop_left = random.randint(1, 3)
-    crop_top = random.randint(1, 3)
-    crop_right = random.randint(1, 3)
-    crop_bottom = random.randint(1, 3)
-    if w > (crop_left + crop_right + 50) and h > (crop_top + crop_bottom + 50):
-        clean = clean.crop((crop_left, crop_top, w - crop_right, h - crop_bottom))
+    # 3. Sub-block luminance jitter (16x16 grid) — defeats dHash adjacent comparisons
+    sub_h = max(h // 16, 1)
+    sub_w = max(w // 16, 1)
+    for sy in range(0, h, sub_h):
+        for sx in range(0, w, sub_w):
+            pixels[sy:sy+sub_h, sx:sx+sub_w, :] += random.uniform(-7, 7)
 
-    # 4. Slight brightness & contrast shift (imperceptible, 0.5-1.5% variation)
-    brightness_factor = random.uniform(0.985, 1.015)
-    contrast_factor = random.uniform(0.985, 1.015)
-    clean = ImageEnhance.Brightness(clean).enhance(brightness_factor)
-    clean = ImageEnhance.Contrast(clean).enhance(contrast_factor)
+    # 4. Random gradient overlay — defeats wHash (wavelet-based)
+    grad_strength = random.uniform(14, 24)
+    grad_angle = random.choice(["diag1", "diag2", "horizontal", "vertical"])
+    gy, gx = np.mgrid[0:h, 0:w]
+    if grad_angle == "diag1":
+        gradient = (gx / w + gy / h) / 2
+    elif grad_angle == "diag2":
+        gradient = (gx / w + (1 - gy / h)) / 2
+    elif grad_angle == "horizontal":
+        gradient = gx / w
+    else:
+        gradient = gy / h
+    gradient = (gradient - 0.5) * grad_strength
+    pixels += gradient[:, :, np.newaxis]
 
-    # 5. Re-encode with slightly randomized quality (breaks file-level hash)
+    # 5. Per-pixel noise + per-channel shift
+    pixels += np.random.uniform(-3, 3, size=pixels.shape)
+    pixels += np.random.uniform(-4, 4, size=3)
+
+    # 6. LAST pixel op: Targeted aHash defeat (oracle attack)
+    #    Must be LAST so subsequent operations don't undo the flips.
+    #    aHash: resize to 8x8 grayscale → compare each pixel to mean → 1/0.
+    pixels_clipped = np.clip(pixels, 0, 255).astype(np.uint8)
+    from PIL import Image as _PILImg
+    temp_img = _PILImg.fromarray(pixels_clipped, "RGB")
+    small = temp_img.resize((8, 8), _PILImg.LANCZOS).convert("L")
+    small_arr = np.array(small, dtype=np.float64)
+    mean_val = np.mean(small_arr)
+
+    cell_h = max(h // 8, 1)
+    cell_w = max(w // 8, 1)
+    target_flips = random.randint(16, 26)  # flip 25-40% of 64 bits
+    diffs = []
+    for cy in range(8):
+        for cx in range(8):
+            diff = small_arr[cy, cx] - mean_val
+            diffs.append((abs(diff), cy, cx, diff))
+    diffs.sort(key=lambda x: x[0])
+
+    for idx, (_, cy, cx, diff) in enumerate(diffs):
+        if idx >= target_flips:
+            break
+        # Overshoot: shift by |diff| + margin to guarantee the flip survives
+        margin = random.uniform(12, 20)
+        shift = -(abs(diff) + margin) if diff > 0 else (abs(diff) + margin)
+        y0 = cy * cell_h
+        x0 = cx * cell_w
+        pixels[y0:y0+cell_h, x0:x0+cell_w, :] += shift
+
+    pixels = np.clip(pixels, 0, 255).astype(np.uint8)
+    clean = Image.fromarray(pixels, "RGB")
+
+    # 6. Micro-crop (3-14px from each side)
+    crop_left = random.randint(3, 14)
+    crop_top = random.randint(3, 14)
+    crop_right = random.randint(3, 14)
+    crop_bottom = random.randint(3, 14)
+    cw, ch = clean.size
+    if cw > (crop_left + crop_right + 100) and ch > (crop_top + crop_bottom + 100):
+        clean = clean.crop((crop_left, crop_top, cw - crop_right, ch - crop_bottom))
+
+    # 7. Slight scale (95-105%) — changes the downscaled representation
+    scale = random.uniform(0.95, 1.05)
+    new_w = int(clean.width * scale)
+    new_h = int(clean.height * scale)
+    clean = clean.resize((new_w, new_h), Image.LANCZOS)
+
+    # 8. Slight rotation (0.3-2.0 degrees) — breaks spatial grid alignment
+    angle = random.uniform(0.3, 2.0) * random.choice([-1, 1])
+    clean = clean.rotate(angle, resample=Image.BICUBIC, expand=False, fillcolor=(255, 255, 255))
+
+    # 9. Brightness/contrast/color enhancement
+    clean = ImageEnhance.Brightness(clean).enhance(random.uniform(0.97, 1.03))
+    clean = ImageEnhance.Contrast(clean).enhance(random.uniform(0.97, 1.03))
+    clean = ImageEnhance.Color(clean).enhance(random.uniform(0.97, 1.03))
+
+    # 10. Re-encode with randomized quality
     if ext in (".jpg", ".jpeg"):
-        quality = random.randint(92, 97)
-        clean.save(output_path, "JPEG", quality=quality, subsampling=0)
+        clean.save(output_path, "JPEG", quality=random.randint(88, 95), subsampling=random.choice([0, 2]))
     elif ext == ".png":
-        clean.save(output_path, "PNG", compress_level=random.randint(1, 3))
+        clean.save(output_path, "PNG", compress_level=random.randint(1, 4))
     elif ext == ".webp":
-        clean.save(output_path, "WEBP", quality=random.randint(90, 97))
+        clean.save(output_path, "WEBP", quality=random.randint(85, 95))
     else:
         clean.save(output_path)
 
-    new_w, new_h = clean.size
+    final_w, final_h = clean.size
     return {
         "status": "ok",
         "action": "facebook_bypass",
-        "noise": "±2 per channel",
         "crop": f"{crop_left}px,{crop_top}px,{crop_right}px,{crop_bottom}px",
-        "brightness": f"{brightness_factor:.3f}",
-        "contrast": f"{contrast_factor:.3f}",
-        "new_dimensions": f"{new_w}x{new_h}",
+        "scale": f"{scale:.3f}",
+        "rotation": f"{angle:.2f} deg",
+        "gradient": grad_angle,
+        "new_dimensions": f"{final_w}x{final_h}",
     }
+
+
+def process_image_facebook(input_path, output_path, max_retries=5):
+    """Facebook/Ads bypass with self-verification.
+
+    Processes the image and verifies all perceptual hashes pass detection
+    thresholds. Retries up to max_retries times if any hash is too similar.
+    """
+    try:
+        import imagehash
+        has_imagehash = True
+    except ImportError:
+        has_imagehash = False
+
+    from PIL import Image as _Img
+
+    for attempt in range(max_retries):
+        result = _apply_facebook_bypass(input_path, output_path)
+
+        if not has_imagehash:
+            result["verified"] = False
+            return result
+
+        # Self-verify: check all perceptual hashes
+        orig = _Img.open(input_path)
+        proc = _Img.open(output_path)
+        thresholds = {"phash": 8, "dhash": 10, "ahash": 8, "whash": 8}
+        hash_fns = {
+            "phash": imagehash.phash,
+            "dhash": imagehash.dhash,
+            "ahash": imagehash.average_hash,
+            "whash": imagehash.whash,
+        }
+
+        all_pass = True
+        distances = {}
+        for name, fn in hash_fns.items():
+            dist = fn(orig) - fn(proc)
+            distances[name] = dist
+            if dist < thresholds[name]:
+                all_pass = False
+
+        if all_pass:
+            result["verified"] = True
+            result["attempt"] = attempt + 1
+            result["distances"] = distances
+            return result
+
+    # Return last result even if not fully passing
+    result["verified"] = False
+    result["attempt"] = max_retries
+    result["distances"] = distances
+    return result
 
 
 def process_image(input_path, output_path, mode, custom_meta=None):
