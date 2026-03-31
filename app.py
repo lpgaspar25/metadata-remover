@@ -288,6 +288,115 @@ def save_image_lossless(img, output_path, ext, exif_bytes=None):
         img.save(output_path)
 
 
+def _apply_anti_ocr(input_path, output_path):
+    """Anti-OCR/Logo detection: distorts text and logos so AI can't read them.
+    Keeps image visually good for humans but defeats OCR and logo recognition."""
+    from PIL import Image, ImageEnhance, ImageFilter
+    import numpy as np
+    from scipy.ndimage import gaussian_filter, map_coordinates
+
+    ext = Path(input_path).suffix.lower()
+    img = Image.open(input_path)
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+
+    w, h = img.size
+    pixels = np.array(img, dtype=np.float64)
+
+    # 1. Detect high-contrast edges (where text/logos likely are)
+    gray = np.mean(pixels, axis=2)
+    # Sobel-like edge detection
+    edge_x = np.abs(np.diff(gray, axis=1, prepend=gray[:, :1]))
+    edge_y = np.abs(np.diff(gray, axis=0, prepend=gray[:1, :]))
+    edges = np.sqrt(edge_x**2 + edge_y**2)
+    # Dilate edges to cover full text strokes
+    edges = gaussian_filter(edges, sigma=2.0)
+    edge_mask = np.clip(edges / max(np.percentile(edges, 95), 1), 0, 1)
+
+    # 2. Micro-warp displacement field — distorts text shapes
+    #    Creates smooth random displacement that bends letter strokes
+    warp_strength = random.uniform(1.5, 3.0)
+    # Low-frequency displacement field
+    disp_x = np.random.randn(h, w) * warp_strength
+    disp_y = np.random.randn(h, w) * warp_strength
+    # Smooth it so displacement is gradual (no tearing)
+    disp_x = gaussian_filter(disp_x, sigma=max(h, w) / 60)
+    disp_y = gaussian_filter(disp_y, sigma=max(h, w) / 60)
+    # Apply stronger warp near edges (text), less in smooth areas
+    disp_x *= (0.3 + edge_mask * 2.0)
+    disp_y *= (0.3 + edge_mask * 2.0)
+
+    # Apply displacement via interpolation
+    coords_y, coords_x = np.mgrid[0:h, 0:w]
+    map_y = coords_y.astype(np.float64) + disp_y
+    map_x = coords_x.astype(np.float64) + disp_x
+    map_y = np.clip(map_y, 0, h - 1)
+    map_x = np.clip(map_x, 0, w - 1)
+
+    warped = np.zeros_like(pixels)
+    for c in range(3):
+        warped[:, :, c] = map_coordinates(pixels[:, :, c], [map_y, map_x], order=1, mode='reflect')
+    pixels = warped
+
+    # 3. Edge-targeted noise — breaks letter contours that OCR relies on
+    noise = np.random.uniform(-12, 12, size=pixels.shape)
+    # Apply noise strongest on edges (text), minimal on smooth areas
+    noise *= edge_mask[:, :, np.newaxis]
+    pixels += noise
+
+    # 4. Micro color-shift on edges — changes letter color slightly per region
+    #    This defeats color-based text segmentation
+    color_shift = np.zeros_like(pixels)
+    block = max(min(h, w) // 6, 10)
+    for by in range(0, h, block):
+        for bx in range(0, w, block):
+            shift = np.random.uniform(-8, 8, size=3)
+            color_shift[by:by+block, bx:bx+block] = shift
+    for c in range(3):
+        color_shift[:, :, c] = gaussian_filter(color_shift[:, :, c], sigma=block * 0.8)
+    color_shift *= edge_mask[:, :, np.newaxis] * 1.5
+    pixels += color_shift
+
+    # 5. Invisible high-frequency pattern overlay — confuses CNN feature extraction
+    #    Creates a subtle moiré-like pattern that disrupts neural network features
+    freq_x = random.uniform(0.05, 0.15)
+    freq_y = random.uniform(0.05, 0.15)
+    phase_x = random.uniform(0, 2 * np.pi)
+    phase_y = random.uniform(0, 2 * np.pi)
+    yy, xx = np.mgrid[0:h, 0:w]
+    pattern = np.sin(xx * freq_x + phase_x) * np.cos(yy * freq_y + phase_y)
+    pattern_strength = random.uniform(3, 6)
+    pixels += (pattern * pattern_strength)[:, :, np.newaxis]
+
+    # 6. Selective blur on high-detail areas — softens sharp text edges
+    pixels_uint8 = np.clip(pixels, 0, 255).astype(np.uint8)
+    blurred = gaussian_filter(pixels_uint8.astype(np.float64), sigma=0.6)
+    # Mix: more blur on edges (text), keep smooth areas sharp
+    blend = edge_mask[:, :, np.newaxis] * 0.4  # 40% blur on text edges
+    pixels = pixels * (1 - blend) + blurred * blend
+
+    pixels = np.clip(pixels, 0, 255).astype(np.uint8)
+    clean = Image.fromarray(pixels, "RGB")
+
+    # 7. Save with high quality
+    if ext in (".jpg", ".jpeg"):
+        clean.save(output_path, "JPEG", quality=random.randint(93, 98), subsampling=0)
+    elif ext == ".png":
+        clean.save(output_path, "PNG", compress_level=random.randint(1, 3))
+    elif ext == ".webp":
+        clean.save(output_path, "WEBP", quality=random.randint(92, 98))
+    else:
+        clean.save(output_path)
+
+    return {
+        "status": "ok",
+        "action": "anti_ocr",
+        "warp_strength": f"{warp_strength:.2f}",
+        "pattern_strength": f"{pattern_strength:.1f}",
+        "new_dimensions": f"{w}x{h}",
+    }
+
+
 def _apply_facebook_bypass(input_path, output_path):
     """Core Facebook bypass processing (single attempt)."""
     from PIL import Image, ImageEnhance
@@ -302,26 +411,48 @@ def _apply_facebook_bypass(input_path, output_path):
 
     w, h = img.size
 
+    from scipy.ndimage import gaussian_filter
+
     # 1. Strip metadata: copy raw pixels to new image
     pixels = np.array(img, dtype=np.float64)
 
-    # 2. Block-level color shifts — defeats pHash and dHash (DCT-based)
-    block_h = max(h // 8, 1)
-    block_w = max(w // 8, 1)
+    # 1b. Shadow lift — continuous curve that lifts dark pixels proportionally
+    #     Darker pixels get lifted more, bright pixels unaffected (like "shadows" slider)
+    luminance = np.mean(pixels, axis=2)
+    dark_ratio = np.sum(luminance < 30) / (h * w)
+    if dark_ratio > 0.3:  # If >30% of image is very dark
+        lift_strength = random.uniform(20, 32)
+        # Continuous curve: max lift at 0, tapering to 0 lift at threshold
+        threshold = 50
+        lift_factor = np.clip((threshold - luminance) / threshold, 0, 1) ** 2.0
+        # Heavy gaussian blur so there are no edges at all
+        lift_factor = gaussian_filter(lift_factor, sigma=max(h, w) / 10)
+        # Apply UNIFORM lift (same to all 3 channels) to avoid color cast
+        lift_map = lift_factor * lift_strength
+        # Add tiny per-pixel noise to break uniformity
+        lift_map += np.random.uniform(-1.5, 1.5, size=(h, w)) * lift_factor
+        pixels[:, :, 0] += lift_map
+        pixels[:, :, 1] += lift_map
+        pixels[:, :, 2] += lift_map
+
+    # 2. Smooth color shifts, scaled by brightness (dark areas get less shift)
+    grid = 32
+    block_h = max(h // grid, 1)
+    block_w = max(w // grid, 1)
+    shift_map = np.zeros_like(pixels)
     for by in range(0, h, block_h):
         for bx in range(0, w, block_w):
-            shift = np.random.uniform(-16, 16, size=3)
-            pixels[by:by+block_h, bx:bx+block_w] += shift
+            shift = np.random.uniform(-4, 4, size=3)
+            shift_map[by:by+block_h, bx:bx+block_w] = shift
+    for c in range(3):
+        shift_map[:, :, c] = gaussian_filter(shift_map[:, :, c], sigma=max(h, w) / 40)
+    # Scale shifts by pixel brightness — dark areas barely change color
+    brightness_scale = np.clip(luminance / 120.0, 0.05, 1.0)
+    shift_map *= brightness_scale[:, :, np.newaxis]
+    pixels += shift_map * 3
 
-    # 3. Sub-block luminance jitter (16x16 grid) — defeats dHash adjacent comparisons
-    sub_h = max(h // 16, 1)
-    sub_w = max(w // 16, 1)
-    for sy in range(0, h, sub_h):
-        for sx in range(0, w, sub_w):
-            pixels[sy:sy+sub_h, sx:sx+sub_w, :] += random.uniform(-7, 7)
-
-    # 4. Random gradient overlay — defeats wHash (wavelet-based)
-    grad_strength = random.uniform(14, 24)
+    # 3. Smooth gradient overlay — defeats wHash (wavelet-based)
+    grad_strength = random.uniform(5, 10)
     grad_angle = random.choice(["diag1", "diag2", "horizontal", "vertical"])
     gy, gx = np.mgrid[0:h, 0:w]
     if grad_angle == "diag1":
@@ -335,13 +466,12 @@ def _apply_facebook_bypass(input_path, output_path):
     gradient = (gradient - 0.5) * grad_strength
     pixels += gradient[:, :, np.newaxis]
 
-    # 5. Per-pixel noise + per-channel shift
-    pixels += np.random.uniform(-3, 3, size=pixels.shape)
-    pixels += np.random.uniform(-4, 4, size=3)
+    # 4. Fine per-pixel noise (invisible at normal viewing)
+    pixels += np.random.uniform(-2, 2, size=pixels.shape)
+    pixels += np.random.uniform(-2, 2, size=3)
 
-    # 6. LAST pixel op: Targeted aHash defeat (oracle attack)
-    #    Must be LAST so subsequent operations don't undo the flips.
-    #    aHash: resize to 8x8 grayscale → compare each pixel to mean → 1/0.
+    # 5. Targeted aHash defeat — adaptive per-cell brightness adjustment
+    #    Uses radial gradient per cell to avoid hard edges while ensuring hash flips
     pixels_clipped = np.clip(pixels, 0, 255).astype(np.uint8)
     from PIL import Image as _PILImg
     temp_img = _PILImg.fromarray(pixels_clipped, "RGB")
@@ -351,7 +481,7 @@ def _apply_facebook_bypass(input_path, output_path):
 
     cell_h = max(h // 8, 1)
     cell_w = max(w // 8, 1)
-    target_flips = random.randint(16, 26)  # flip 25-40% of 64 bits
+    target_flips = random.randint(12, 20)
     diffs = []
     for cy in range(8):
         for cx in range(8):
@@ -359,36 +489,48 @@ def _apply_facebook_bypass(input_path, output_path):
             diffs.append((abs(diff), cy, cx, diff))
     diffs.sort(key=lambda x: x[0])
 
-    for idx, (_, cy, cx, diff) in enumerate(diffs):
+    # Build adjustment map for all target cells, then blur globally
+    adjust_map = np.zeros((h, w), dtype=np.float64)
+    for idx, (abs_diff, cy, cx, diff) in enumerate(diffs):
         if idx >= target_flips:
             break
-        # Overshoot: shift by |diff| + margin to guarantee the flip survives
-        margin = random.uniform(12, 20)
-        shift = -(abs(diff) + margin) if diff > 0 else (abs(diff) + margin)
+        if abs_diff < 3:
+            margin = random.uniform(15, 25)
+        elif abs_diff < 8:
+            margin = random.uniform(10, 16)
+        else:
+            margin = random.uniform(6, 12)
+        shift = -(abs_diff + margin) if diff > 0 else (abs_diff + margin)
         y0 = cy * cell_h
         x0 = cx * cell_w
-        pixels[y0:y0+cell_h, x0:x0+cell_w, :] += shift
+        y1 = min(y0 + cell_h, h)
+        x1 = min(x0 + cell_w, w)
+        adjust_map[y0:y1, x0:x1] += shift
+
+    # Moderate gaussian blur — smooths edges while preserving enough strength
+    adjust_map = gaussian_filter(adjust_map, sigma=max(cell_h, cell_w) * 0.8)
+    pixels += adjust_map[:, :, np.newaxis]
 
     pixels = np.clip(pixels, 0, 255).astype(np.uint8)
     clean = Image.fromarray(pixels, "RGB")
 
-    # 6. Micro-crop (3-14px from each side)
-    crop_left = random.randint(3, 14)
-    crop_top = random.randint(3, 14)
-    crop_right = random.randint(3, 14)
-    crop_bottom = random.randint(3, 14)
+    # 6. Micro-crop (1-4px from each side — nearly invisible)
+    crop_left = random.randint(1, 4)
+    crop_top = random.randint(1, 4)
+    crop_right = random.randint(1, 4)
+    crop_bottom = random.randint(1, 4)
     cw, ch = clean.size
     if cw > (crop_left + crop_right + 100) and ch > (crop_top + crop_bottom + 100):
         clean = clean.crop((crop_left, crop_top, cw - crop_right, ch - crop_bottom))
 
-    # 7. Slight scale (95-105%) — changes the downscaled representation
-    scale = random.uniform(0.95, 1.05)
+    # 7. Slight scale (98-102%) — subtle dimension change
+    scale = random.uniform(0.98, 1.02)
     new_w = int(clean.width * scale)
     new_h = int(clean.height * scale)
     clean = clean.resize((new_w, new_h), Image.LANCZOS)
 
-    # 8. Slight rotation (0.3-2.0 degrees) — breaks spatial grid alignment
-    angle = random.uniform(0.3, 2.0) * random.choice([-1, 1])
+    # 8. Very slight rotation (0.1-0.5 degrees) — breaks grid without visible tilt
+    angle = random.uniform(0.1, 0.5) * random.choice([-1, 1])
     clean = clean.rotate(angle, resample=Image.BICUBIC, expand=False, fillcolor=(255, 255, 255))
 
     # 9. Brightness/contrast/color enhancement
@@ -396,13 +538,13 @@ def _apply_facebook_bypass(input_path, output_path):
     clean = ImageEnhance.Contrast(clean).enhance(random.uniform(0.97, 1.03))
     clean = ImageEnhance.Color(clean).enhance(random.uniform(0.97, 1.03))
 
-    # 10. Re-encode with randomized quality
+    # 10. Re-encode with high quality (subtle randomization)
     if ext in (".jpg", ".jpeg"):
-        clean.save(output_path, "JPEG", quality=random.randint(88, 95), subsampling=random.choice([0, 2]))
+        clean.save(output_path, "JPEG", quality=random.randint(93, 98), subsampling=0)
     elif ext == ".png":
-        clean.save(output_path, "PNG", compress_level=random.randint(1, 4))
+        clean.save(output_path, "PNG", compress_level=random.randint(1, 3))
     elif ext == ".webp":
-        clean.save(output_path, "WEBP", quality=random.randint(85, 95))
+        clean.save(output_path, "WEBP", quality=random.randint(92, 98))
     else:
         clean.save(output_path)
 
@@ -418,7 +560,7 @@ def _apply_facebook_bypass(input_path, output_path):
     }
 
 
-def process_image_facebook(input_path, output_path, max_retries=5):
+def process_image_facebook(input_path, output_path, max_retries=8):
     """Facebook/Ads bypass with self-verification.
 
     Processes the image and verifies all perceptual hashes pass detection
@@ -454,7 +596,7 @@ def process_image_facebook(input_path, output_path, max_retries=5):
         distances = {}
         for name, fn in hash_fns.items():
             dist = fn(orig) - fn(proc)
-            distances[name] = dist
+            distances[name] = int(dist)
             if dist < thresholds[name]:
                 all_pass = False
 
@@ -481,6 +623,21 @@ def process_image(input_path, output_path, mode, custom_meta=None):
 
     if mode == "facebook":
         return process_image_facebook(input_path, output_path)
+
+    if mode == "anti_ocr":
+        return _apply_anti_ocr(input_path, output_path)
+
+    if mode == "facebook_full":
+        # Both: first anti-OCR, then hash bypass on the result
+        temp_path = str(Path(output_path).parent / ("_temp_ocr_" + Path(output_path).name))
+        _apply_anti_ocr(input_path, temp_path)
+        result = process_image_facebook(temp_path, output_path)
+        result["action"] = "facebook_full"
+        try:
+            os.remove(temp_path)
+        except OSError:
+            pass
+        return result
 
     if mode == "remove":
         if ext == ".gif" and getattr(img, "is_animated", False):

@@ -656,8 +656,16 @@
         <h2>Modo de Operação</h2>
         <div class="mode-cards">
             <div class="mode-card" data-mode="facebook" onclick="selectMode(this)" style="border: 2px solid #e17055; background: rgba(225, 112, 85, 0.08);">
-                <h3 style="color: #e17055;">Bypass Facebook / Ads</h3>
-                <p>Remove metadados + altera pixels imperceptivelmente para burlar detecção por hash perceptual (pHash), fingerprinting. <strong>Facebook, Instagram, Google Ads.</strong></p>
+                <h3 style="color: #e17055;">Bypass Hash</h3>
+                <p>Altera pixels para burlar detecção por hash perceptual (pHash, dHash, aHash). A imagem parece "nova" para o sistema.</p>
+            </div>
+            <div class="mode-card" data-mode="anti_ocr" onclick="selectMode(this)" style="border: 2px solid #fdcb6e; background: rgba(253, 203, 110, 0.08);">
+                <h3 style="color: #fdcb6e;">Anti-OCR / Logo</h3>
+                <p>Distorce textos e logos sutilmente para que a IA não consiga ler marcas, nomes ou palavras na imagem.</p>
+            </div>
+            <div class="mode-card" data-mode="facebook_full" onclick="selectMode(this)" style="border: 2px solid #e84393; background: rgba(232, 67, 147, 0.08);">
+                <h3 style="color: #e84393;">Bypass Completo</h3>
+                <p>Anti-OCR + Bypass Hash juntos. Máxima proteção: a IA não lê marcas E a imagem parece nova. <strong>Facebook, Instagram, Google Ads.</strong></p>
             </div>
             <div class="mode-card active" data-mode="remove" onclick="selectMode(this)">
                 <h3>Remover Tudo</h3>
@@ -949,18 +957,25 @@
         custom.classList.toggle('visible', currentMode === 'custom');
     }
 
-    // Ensure Facebook bypass card exists (fallback for cached HTML)
-    (function injectFacebookCard() {
+    // Ensure bypass cards exist (fallback for cached HTML)
+    (function injectBypassCards() {
         const container = document.querySelector('.mode-cards');
         if (!container) return;
-        if (container.querySelector('[data-mode="facebook"]')) return;
-        const card = document.createElement('div');
-        card.className = 'mode-card';
-        card.dataset.mode = 'facebook';
-        card.onclick = function() { selectMode(this); };
-        card.style.cssText = 'border: 2px solid #e17055; background: rgba(225, 112, 85, 0.08);';
-        card.innerHTML = '<h3 style="color: #e17055;">Bypass Facebook / Ads</h3><p>Remove metadados + altera pixels imperceptivelmente para burlar detecção por hash perceptual (pHash), fingerprinting. <strong>Facebook, Instagram, Google Ads.</strong></p>';
-        container.insertBefore(card, container.firstChild);
+        const cards = [
+            { mode: 'facebook', color: '#e17055', title: 'Bypass Hash', desc: 'Altera pixels para burlar detecção por hash perceptual (pHash, dHash, aHash). A imagem parece "nova" para o sistema.' },
+            { mode: 'anti_ocr', color: '#fdcb6e', title: 'Anti-OCR / Logo', desc: 'Distorce textos e logos sutilmente para que a IA não consiga ler marcas, nomes ou palavras na imagem.' },
+            { mode: 'facebook_full', color: '#e84393', title: 'Bypass Completo', desc: 'Anti-OCR + Bypass Hash juntos. Máxima proteção. <strong>Facebook, Instagram, Google Ads.</strong>' },
+        ];
+        cards.forEach(c => {
+            if (container.querySelector(`[data-mode="${c.mode}"]`)) return;
+            const card = document.createElement('div');
+            card.className = 'mode-card';
+            card.dataset.mode = c.mode;
+            card.onclick = function() { selectMode(this); };
+            card.style.cssText = `border: 2px solid ${c.color}; background: ${c.color}15;`;
+            card.innerHTML = `<h3 style="color: ${c.color};">${c.title}</h3><p>${c.desc}</p>`;
+            container.insertBefore(card, container.firstChild);
+        });
     })();
 
 
@@ -1093,7 +1108,7 @@
 
         const payload = {
             job_id: currentJobId,
-            mode: currentMode === 'custom' ? 'replace' : currentMode,  // remove | replace | facebook
+            mode: currentMode === 'custom' ? 'replace' : currentMode,  // remove | replace | facebook | anti_ocr | facebook_full
             files: files.map(f => ({ path: f.path, name: f.name, size: f.size }))
         };
 
