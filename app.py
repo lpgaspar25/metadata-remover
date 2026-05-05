@@ -127,9 +127,13 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".tiff", ".tif", ".png", ".heic", ".webp", ".bmp"
 VIDEO_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".m4v", ".wmv", ".flv", ".3gp", ".webm"}
 FFMPEG = shutil.which("ffmpeg") or "/opt/homebrew/bin/ffmpeg"
 FFPROBE = shutil.which("ffprobe") or "/opt/homebrew/bin/ffprobe"
+EXIFTOOL = shutil.which("exiftool") or "/opt/homebrew/bin/exiftool"
 
 # Jobs in progress
 jobs = {}
+
+# Donor metadata store: donor_id -> filepath
+donors = {}
 
 CAMERAS = [
     "Apple iPhone 15 Pro", "Samsung Galaxy S24 Ultra", "Google Pixel 8 Pro",
@@ -613,13 +617,18 @@ def process_image_facebook(input_path, output_path, max_retries=8):
     return result
 
 
-def process_image(input_path, output_path, mode, custom_meta=None):
+def process_image(input_path, output_path, mode, custom_meta=None, donor_path=None):
     """Process image without quality loss."""
     from PIL import Image
     import piexif
 
     ext = Path(input_path).suffix.lower()
     img = Image.open(input_path)
+
+    if mode == "copy_meta":
+        if not donor_path or not os.path.exists(donor_path):
+            return {"status": "error", "action": "copy_meta", "error": "Arquivo doador não encontrado"}
+        return copy_metadata_from_donor(donor_path, input_path, output_path)
 
     if mode == "facebook":
         return process_image_facebook(input_path, output_path)
@@ -701,6 +710,59 @@ def process_image(input_path, output_path, mode, custom_meta=None):
         "new_camera": camera, "new_date": date_str[:10],
         "new_gps": f"{city_name} ({lat:.4f}, {lon:.4f})"
     }
+
+
+# ─────────────────────────────────────────────
+# Copy Metadata (donor → target)
+# ─────────────────────────────────────────────
+
+def copy_metadata_from_donor(donor_path, target_path, output_path):
+    """Copy ALL metadata from donor image to target image using exiftool.
+    Works for: JPG, PNG, WebP, TIFF, BMP, GIF, HEIC and all video formats.
+    """
+    import shutil as _shutil
+    _shutil.copy2(target_path, output_path)
+
+    # Use exiftool to copy all tags from donor to output (in-place)
+    cmd = [
+        EXIFTOOL,
+        "-TagsFromFile", donor_path,
+        "-all:all",
+        "--FileModifyDate",
+        "-overwrite_original",
+        output_path
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    if result.returncode != 0:
+        # Fallback: try piexif for JPG→JPG
+        donor_ext = Path(donor_path).suffix.lower()
+        target_ext = Path(target_path).suffix.lower()
+        if donor_ext in (".jpg", ".jpeg") and target_ext in (".jpg", ".jpeg"):
+            import piexif
+            try:
+                exif_data = piexif.load(donor_path)
+                exif_bytes = piexif.dump(exif_data)
+                piexif.insert(exif_bytes, output_path)
+            except Exception as e:
+                return {"status": "error", "action": "copy_meta", "error": str(e)}
+        else:
+            return {"status": "error", "action": "copy_meta", "error": result.stderr[:200]}
+
+    return {"status": "ok", "action": "copy_meta"}
+
+
+def get_all_metadata_exiftool(filepath):
+    """Read all metadata from a file using exiftool, returning a dict."""
+    cmd = [EXIFTOOL, "-json", "-G", "-a", "-u", filepath]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    if result.returncode == 0:
+        try:
+            data = json.loads(result.stdout)
+            if data:
+                return data[0]
+        except Exception:
+            pass
+    return {}
 
 
 def process_video(input_path, output_path, mode, custom_meta=None):
@@ -872,7 +934,7 @@ def get_friendly_metadata(filepath):
     return meta
 
 
-def process_job(job_id, files_info, mode, custom_meta):
+def process_job(job_id, files_info, mode, custom_meta, donor_path=None):
     """Background processing of files."""
     job = jobs[job_id]
     job["status"] = "processing"
@@ -891,9 +953,14 @@ def process_job(job_id, files_info, mode, custom_meta):
 
         try:
             if ext in IMAGE_EXTS:
-                res = process_image(str(src), str(out_path), mode, custom_meta)
+                res = process_image(str(src), str(out_path), mode, custom_meta, donor_path=donor_path)
             elif ext in VIDEO_EXTS:
-                if mode == "facebook":
+                if mode == "copy_meta":
+                    if donor_path and os.path.exists(donor_path):
+                        res = copy_metadata_from_donor(donor_path, str(src), str(out_path))
+                    else:
+                        res = {"status": "error", "action": "copy_meta", "error": "Doador não encontrado"}
+                elif mode == "facebook":
                     # For videos, facebook mode strips all metadata
                     res = process_video(str(src), str(out_path), "remove", None)
                     res["action"] = "facebook_bypass"
@@ -962,6 +1029,46 @@ def upload_files():
     return jsonify({"job_id": job_id, "files": files_info})
 
 
+@app.route("/api/upload-donor", methods=["POST"])
+def upload_donor():
+    """Upload a donor image whose metadata will be copied to target images."""
+    f = request.files.get("donor")
+    if not f or not f.filename:
+        return jsonify({"error": "Nenhum arquivo enviado"}), 400
+
+    donor_id = str(uuid.uuid4())[:8]
+    donor_dir = UPLOAD_DIR / ("donor_" + donor_id)
+    donor_dir.mkdir(parents=True, exist_ok=True)
+
+    safe_name = f.filename.replace("/", "_").replace("\\", "_")
+    save_path = donor_dir / safe_name
+    f.save(str(save_path))
+
+    # Read rich metadata via exiftool
+    meta_rich = get_all_metadata_exiftool(str(save_path))
+    meta_friendly = get_friendly_metadata(str(save_path))
+
+    donors[donor_id] = str(save_path)
+
+    return jsonify({
+        "donor_id": donor_id,
+        "filename": safe_name,
+        "metadata": meta_friendly,
+        "metadata_full": meta_rich,
+        "tag_count": len(meta_rich)
+    })
+
+
+@app.route("/api/donor-meta/<donor_id>")
+def donor_meta(donor_id):
+    """Get metadata of uploaded donor file."""
+    path = donors.get(donor_id)
+    if not path or not os.path.exists(path):
+        return jsonify({"error": "Doador não encontrado"}), 404
+    meta = get_all_metadata_exiftool(path)
+    return jsonify({"metadata": meta, "tag_count": len(meta)})
+
+
 @app.route("/api/upload-folder", methods=["POST"])
 def upload_folder_path():
     """Process files from a local folder path."""
@@ -1015,6 +1122,15 @@ def start_processing():
         except ValueError:
             pass
 
+    # Copy metadata mode: resolve donor path
+    donor_path = None
+    if mode == "copy_meta":
+        donor_id = data.get("donor_id")
+        if donor_id:
+            donor_path = donors.get(donor_id)
+        if not donor_path or not os.path.exists(str(donor_path)):
+            return jsonify({"error": "Arquivo doador não encontrado. Faça o upload do doador primeiro."}), 400
+
     jobs[job_id] = {
         "status": "queued",
         "total": len(files_info),
@@ -1022,7 +1138,7 @@ def start_processing():
         "results": []
     }
 
-    t = threading.Thread(target=process_job, args=(job_id, files_info, mode, custom_meta or None))
+    t = threading.Thread(target=process_job, args=(job_id, files_info, mode, custom_meta or None, donor_path))
     t.daemon = True
     t.start()
 

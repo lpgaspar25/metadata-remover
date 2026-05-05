@@ -168,7 +168,15 @@
         }
 
         .mode-card:hover { border-color: var(--accent2); }
-        .mode-card.active { border-color: var(--accent); background: rgba(108, 92, 231, 0.08); }
+        .mode-card.active { border-color: var(--accent) !important; background: rgba(108, 92, 231, 0.12) !important; box-shadow: 0 0 12px rgba(108, 92, 231, 0.3); }
+        .mode-card[data-mode="facebook"] { border: 2px solid rgba(225, 112, 85, 0.4); }
+        .mode-card[data-mode="facebook"].active { border-color: #e17055 !important; background: rgba(225, 112, 85, 0.15) !important; box-shadow: 0 0 12px rgba(225, 112, 85, 0.4); }
+        .mode-card[data-mode="anti_ocr"] { border: 2px solid rgba(253, 203, 110, 0.4); }
+        .mode-card[data-mode="anti_ocr"].active { border-color: #fdcb6e !important; background: rgba(253, 203, 110, 0.15) !important; box-shadow: 0 0 12px rgba(253, 203, 110, 0.4); }
+        .mode-card[data-mode="facebook_full"] { border: 2px solid rgba(232, 67, 147, 0.4); }
+        .mode-card[data-mode="facebook_full"].active { border-color: #e84393 !important; background: rgba(232, 67, 147, 0.15) !important; box-shadow: 0 0 12px rgba(232, 67, 147, 0.4); }
+        .mode-card[data-mode="copy_meta"] { border: 2px solid rgba(0, 184, 148, 0.4); }
+        .mode-card[data-mode="copy_meta"].active { border-color: #00b894 !important; background: rgba(0, 184, 148, 0.12) !important; box-shadow: 0 0 12px rgba(0, 184, 148, 0.4); }
         .mode-card h3 { font-size: 15px; margin-bottom: 6px; }
         .mode-card p { color: var(--text2); font-size: 12px; line-height: 1.5; }
 
@@ -655,15 +663,15 @@
     <div class="mode-section" id="modeSection" style="display:none;">
         <h2>Modo de Operação</h2>
         <div class="mode-cards">
-            <div class="mode-card" data-mode="facebook" onclick="selectMode(this)" style="border: 2px solid #e17055; background: rgba(225, 112, 85, 0.08);">
+            <div class="mode-card" data-mode="facebook" onclick="selectMode(this)">
                 <h3 style="color: #e17055;">Bypass Hash</h3>
                 <p>Altera pixels para burlar detecção por hash perceptual (pHash, dHash, aHash). A imagem parece "nova" para o sistema.</p>
             </div>
-            <div class="mode-card" data-mode="anti_ocr" onclick="selectMode(this)" style="border: 2px solid #fdcb6e; background: rgba(253, 203, 110, 0.08);">
+            <div class="mode-card" data-mode="anti_ocr" onclick="selectMode(this)">
                 <h3 style="color: #fdcb6e;">Anti-OCR / Logo</h3>
                 <p>Distorce textos e logos sutilmente para que a IA não consiga ler marcas, nomes ou palavras na imagem.</p>
             </div>
-            <div class="mode-card" data-mode="facebook_full" onclick="selectMode(this)" style="border: 2px solid #e84393; background: rgba(232, 67, 147, 0.08);">
+            <div class="mode-card" data-mode="facebook_full" onclick="selectMode(this)">
                 <h3 style="color: #e84393;">Bypass Completo</h3>
                 <p>Anti-OCR + Bypass Hash juntos. Máxima proteção: a IA não lê marcas E a imagem parece nova. <strong>Facebook, Instagram, Google Ads.</strong></p>
             </div>
@@ -678,6 +686,35 @@
             <div class="mode-card" data-mode="custom" onclick="selectMode(this)">
                 <h3>Personalizado</h3>
                 <p>Você escolhe a câmera, data, GPS e software que serão inseridos.</p>
+            </div>
+            <div class="mode-card" data-mode="copy_meta" onclick="selectMode(this)" style="border: 2px solid rgba(0,184,148,0.4);">
+                <h3 style="color:#00b894;">📋 Copiar Metadados</h3>
+                <p>Copia <strong>todos</strong> os metadados de uma foto doadora para as suas imagens. Funciona em todos os formatos: JPG, PNG, WebP, TIFF, HEIC, GIF e mais.</p>
+            </div>
+        </div>
+
+        <!-- Donor Upload (shown when copy_meta mode selected) -->
+        <div id="donorSection" style="display:none; margin-top:16px; padding:18px; background:rgba(0,184,148,0.08); border:1.5px solid rgba(0,184,148,0.35); border-radius:12px;">
+            <h3 style="color:#00b894; margin-bottom:10px; font-size:15px;">📋 Foto Doadora de Metadados</h3>
+            <p style="color:var(--text2); font-size:13px; margin-bottom:14px;">Carregue a foto cujos metadados serão copiados para todas as imagens acima.</p>
+            <div id="donorDropZone" style="border:2px dashed rgba(0,184,148,0.5); border-radius:10px; padding:20px; text-align:center; cursor:pointer; transition:all .2s;" onclick="document.getElementById('donorFileInput').click()" ondragover="event.preventDefault(); this.style.borderColor='#00b894'" ondrop="handleDonorDrop(event)">
+                <div id="donorPlaceholder">
+                    <div style="font-size:28px; margin-bottom:6px;">📄</div>
+                    <div style="color:#00b894; font-weight:600; font-size:14px;">Clique ou arraste a foto doadora aqui</div>
+                    <div style="color:var(--text2); font-size:12px; margin-top:4px;">JPG, PNG, WebP, TIFF, HEIC, BMP...</div>
+                </div>
+                <div id="donorInfo" style="display:none;"></div>
+            </div>
+            <input type="file" id="donorFileInput" accept="image/*" style="display:none" onchange="uploadDonor(this.files[0])">
+
+            <!-- Donor metadata preview -->
+            <div id="donorMetaPreview" style="display:none; margin-top:14px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                    <span style="color:#00b894; font-size:13px; font-weight:600;" id="donorMetaCount"></span>
+                    <button class="btn btn-outline" style="font-size:11px; padding:4px 10px;" onclick="toggleDonorMetaFull()">Ver todos</button>
+                </div>
+                <div id="donorMetaList" style="max-height:180px; overflow-y:auto; background:rgba(0,0,0,0.2); border-radius:8px; padding:10px; font-size:12px; line-height:1.8;"></div>
+                <div id="donorMetaFull" style="display:none; max-height:320px; overflow-y:auto; background:rgba(0,0,0,0.25); border-radius:8px; padding:10px; font-size:11px; line-height:1.7; margin-top:8px; font-family:monospace;"></div>
             </div>
         </div>
 
@@ -820,6 +857,8 @@
     let currentMode = 'remove';
     let currentJobId = null;
     let lastResults = null;
+    let donorId = null;
+    let donorMetaFull = {};
 
     // ── Drag & Drop ──
     const dropZone = document.getElementById('dropZone');
@@ -955,6 +994,9 @@
 
         const custom = document.getElementById('customOptions');
         custom.classList.toggle('visible', currentMode === 'custom');
+
+        const donorSection = document.getElementById('donorSection');
+        donorSection.style.display = (currentMode === 'copy_meta') ? 'block' : 'none';
     }
 
     // Ensure bypass cards exist (fallback for cached HTML)
@@ -972,7 +1014,7 @@
             card.className = 'mode-card';
             card.dataset.mode = c.mode;
             card.onclick = function() { selectMode(this); };
-            card.style.cssText = `border: 2px solid ${c.color}; background: ${c.color}15;`;
+            // No inline styles — CSS handles via data-mode attribute
             card.innerHTML = `<h3 style="color: ${c.color};">${c.title}</h3><p>${c.desc}</p>`;
             container.insertBefore(card, container.firstChild);
         });
@@ -1130,6 +1172,16 @@
             }
         }
 
+        if (currentMode === 'copy_meta') {
+            if (!donorId) {
+                alert('Carregue a foto doadora antes de processar.');
+                btn.disabled = false;
+                btn.textContent = 'Processar Todos';
+                return;
+            }
+            payload.donor_id = donorId;
+        }
+
         try {
             const res = await fetch('/api/process', {
                 method: 'POST',
@@ -1275,6 +1327,78 @@
             closeCompareModal();
         }
     });
+
+    // ── Donor Upload (Copy Metadata mode) ──
+    function handleDonorDrop(e) {
+        e.preventDefault();
+        const file = e.dataTransfer.files[0];
+        if (file) uploadDonor(file);
+    }
+
+    async function uploadDonor(file) {
+        if (!file) return;
+        const zone = document.getElementById('donorDropZone');
+        const placeholder = document.getElementById('donorPlaceholder');
+        const info = document.getElementById('donorInfo');
+
+        zone.style.borderColor = '#00b894';
+        placeholder.style.display = 'none';
+        info.style.display = 'block';
+        info.innerHTML = `<div style="color:#00b894; font-size:13px;">⏳ Carregando <strong>${file.name}</strong>...</div>`;
+
+        const formData = new FormData();
+        formData.append('donor', file);
+
+        try {
+            const res = await fetch('/api/upload-donor', { method: 'POST', body: formData });
+            const data = await res.json();
+            if (data.error) throw new Error(data.error);
+
+            donorId = data.donor_id;
+            donorMetaFull = data.metadata_full || {};
+
+            info.innerHTML = `
+                <div style="color:#00b894; font-weight:700; font-size:14px; margin-bottom:4px;">✅ ${file.name}</div>
+                <div style="color:var(--text2); font-size:12px;">${data.tag_count} tags encontradas</div>
+            `;
+
+            // Show metadata preview
+            const preview = document.getElementById('donorMetaPreview');
+            const metaList = document.getElementById('donorMetaList');
+            const metaFull = document.getElementById('donorMetaFull');
+            const metaCount = document.getElementById('donorMetaCount');
+
+            preview.style.display = 'block';
+            metaCount.textContent = `${data.tag_count} metadados encontrados`;
+
+            const friendly = data.metadata || {};
+            const keys = Object.keys(friendly).filter(k => k !== 'file' && k !== 'type');
+            metaList.innerHTML = keys.slice(0, 15).map(k => {
+                const label = k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+                return `<div style="display:flex; gap:8px;"><span style="color:#00b894; min-width:130px; flex-shrink:0;">${label}</span><span style="color:var(--text2);">${friendly[k]}</span></div>`;
+            }).join('');
+            if (keys.length > 15) {
+                metaList.innerHTML += `<div style="color:var(--text2); font-style:italic; margin-top:4px;">...e mais ${keys.length - 15} campos</div>`;
+            }
+
+            // Full metadata (all exiftool fields)
+            const fullKeys = Object.keys(donorMetaFull);
+            metaFull.innerHTML = fullKeys.map(k => {
+                const val = typeof donorMetaFull[k] === 'object' ? JSON.stringify(donorMetaFull[k]) : donorMetaFull[k];
+                return `<div><span style="color:#81ecec;">${k}:</span> <span style="color:#dfe6e9;">${String(val).substring(0, 120)}</span></div>`;
+            }).join('');
+
+        } catch (e) {
+            info.innerHTML = `<div style="color:#e17055; font-size:13px;">❌ Erro: ${e.message}</div>`;
+            donorId = null;
+        }
+    }
+
+    function toggleDonorMetaFull() {
+        const full = document.getElementById('donorMetaFull');
+        const isHidden = full.style.display === 'none';
+        full.style.display = isHidden ? 'block' : 'none';
+    }
 </script>
 
 </body>
